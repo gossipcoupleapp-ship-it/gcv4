@@ -13,6 +13,7 @@ import NewsView from './components/NewsView';
 import PrivacyView from './components/PrivacyView';
 import CheckoutMock from './components/CheckoutMock';
 import Onboarding from './components/Onboarding';
+import PaymentSuccess from './components/PaymentSuccess';
 import { GeminiService } from './services/geminiService';
 import { CalendarService } from './services/calendarService';
 
@@ -50,7 +51,7 @@ const tabDescriptions: Record<string, string> = {
   [Tab.PRIVACY]: 'Sua segurança e dados'
 };
 
-type ViewState = 'LANDING' | 'CHECKOUT' | 'ONBOARDING' | 'APP';
+type ViewState = 'LANDING' | 'CHECKOUT' | 'PAYMENT_PROCESSING' | 'ONBOARDING' | 'APP';
 
 const App: React.FC = () => {
   // Navigation State
@@ -96,9 +97,33 @@ const App: React.FC = () => {
     }
   }, []);
 
+  // Handle Stripe Return (Session ID)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get('session_id');
+
+    if (sessionId) {
+      setCurrentView('PAYMENT_PROCESSING');
+
+      // Simulate processing time for UX
+      setTimeout(() => {
+        // Clear URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+
+        setCurrentUserRole('P1'); // Payer is always P1
+        setCurrentView('ONBOARDING');
+      }, 2500);
+    }
+  }, []);
+
   // Fetch Supabase Data
   useEffect(() => {
     const fetchData = async () => {
+      // Prevent fetching/redirecting if handling payment return
+      if (new URLSearchParams(window.location.search).get('session_id')) {
+        return;
+      }
+
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         setLoading(false);
@@ -515,6 +540,10 @@ const App: React.FC = () => {
 
   if (currentView === 'CHECKOUT') {
     return <CheckoutMock onSuccess={handleCheckoutSuccess} />;
+  }
+
+  if (currentView === 'PAYMENT_PROCESSING') {
+    return <PaymentSuccess />;
   }
 
   if (currentView === 'ONBOARDING') {
