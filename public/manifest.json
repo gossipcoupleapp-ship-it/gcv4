@@ -1,0 +1,20 @@
+{
+    "name": "Gossip Couple - AI Finance",
+    "short_name": "GossipCouple",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#ffffff",
+    "theme_color": "#4F46E5",
+    "icons": [
+        {
+            "src": "/pwa-192x192.png",
+            "type": "image/png",
+            "sizes": "192x192"
+        },
+        {
+            "src": "/pwa-512x512.png",
+            "type": "image/png",
+            "sizes": "512x512"
+        }
+    ]
+}

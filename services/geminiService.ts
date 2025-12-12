@@ -2,6 +2,7 @@
 
 import { GoogleGenAI, Type, FunctionDeclaration, Tool } from "@google/genai";
 import { AppState, Transaction, Goal, Task, CalendarEvent } from "../types";
+import { supabase } from "../src/lib/supabase";
 
 const apiKey = process.env.API_KEY || '';
 const ai = new GoogleGenAI({ apiKey });
@@ -40,7 +41,7 @@ const createGoalTool: FunctionDeclaration = {
 
 const createTaskTool: FunctionDeclaration = {
   name: 'createTask',
-  description: 'Assign a task to a partner.',
+  description: 'Assign a task to a partner. Use this when the user asks to do something or pay something.',
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -48,7 +49,8 @@ const createTaskTool: FunctionDeclaration = {
       assignee: { type: Type.STRING, enum: ['user1', 'user2', 'both'], description: 'Who is responsible.' },
       deadline: { type: Type.STRING, description: 'Due date ISO string.' },
       linkedGoalId: { type: Type.STRING, description: 'The ID of the goal this task is linked to, if any.' },
-      priority: { type: Type.STRING, enum: ['high', 'medium', 'low'], description: 'Priority of the task.' }
+      priority: { type: Type.STRING, enum: ['high', 'medium', 'low'], description: 'Priority of the task.' },
+      financial_impact: { type: Type.NUMBER, description: 'If the task involves paying money (e.g. paying rent), put the amount here. Otherwise 0.' }
     },
     required: ['title', 'assignee']
   }
@@ -84,7 +86,40 @@ const getInvestmentAdviceTool: FunctionDeclaration = {
 
 export class GeminiService {
   private model: string = 'gemini-2.5-flash';
-  
+
+  // RAG Lite: Build Context from Supabase
+  private async buildContext(coupleId: string) {
+    // 1. Fetch Balances (Sum of transactions)
+    const { data: transactions } = await supabase
+      .from('transactions')
+      .select('amount, type, category, date, description')
+      .eq('couple_id', coupleId)
+      .order('date', { ascending: false })
+      .limit(10); // Last 10 for context
+
+    const { data: allTrans } = await supabase
+      .from('transactions')
+      .select('amount, type')
+      .eq('couple_id', coupleId);
+
+    const balance = allTrans?.reduce((acc, t) => {
+      return t.type === 'income' ? acc + t.amount : acc - t.amount;
+    }, 0) || 0;
+
+    // 2. Fetch Active Goals
+    const { data: goals } = await supabase
+      .from('goals')
+      .select('title, current_amount, target_amount')
+      .eq('couple_id', coupleId)
+      .eq('status', 'in-progress');
+
+    return {
+      balance,
+      recentTransactions: transactions || [],
+      activeGoals: goals || []
+    };
+  }
+
   // Use search grounding for market data
   async searchMarketData(query: string) {
     try {
@@ -95,7 +130,7 @@ export class GeminiService {
           tools: [{ googleSearch: {} }]
         }
       });
-      
+
       const grounding = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
       const text = response.text;
       return { text, grounding };
@@ -106,29 +141,33 @@ export class GeminiService {
   }
 
   async chatWithAgent(
-    message: string, 
-    currentState: AppState, 
+    message: string,
+    coupleId: string, // Changed from AppState to coupleId
+    currentState: AppState, // Kept for assignee names/profile access if needed, but we rely on DB for financial data
     actionCallbacks: {
       onTransaction: (t: Omit<Transaction, 'id' | 'userId'>) => void,
       onGoal: (g: Omit<Goal, 'id' | 'currentAmount' | 'status'>) => void,
-      onTask: (t: Omit<Task, 'id' | 'completed'>) => void,
+      onTask: (t: Omit<Task, 'id' | 'completed'> & { financial_impact?: number }) => void,
       onEvent: (e: Omit<CalendarEvent, 'id'>) => void
     }
   ) {
+    // Build RAG Context
+    const context = await this.buildContext(coupleId);
+
     const systemInstruction = `
       You are a sophisticated AI financial planner for a couple (${currentState.userProfile.user1.name} and ${currentState.userProfile.user2.name}).
       Your goal is to manage their finances, calendar, and tasks.
       Current Date: ${new Date().toLocaleDateString()}
       
-      Current Financial State:
-      - Net Worth: Calculated from assets - liabilities
-      - Active Goals: ${currentState.goals.map(g => g.title).join(', ')}
-      - Recent Transactions: ${currentState.transactions.slice(0, 5).map(t => `${t.category}: $${t.amount}`).join(', ')}
+      REAL-TIME FINANCIAL CONTEXT (FROM DATABASE):
+      - Total Balance (Net Worth): R$ ${context.balance.toFixed(2)}
+      - Active Goals: ${context.activeGoals.map(g => `${g.title} (${g.current_amount}/${g.target_amount})`).join(', ')}
+      - Recent Transactions: \n${context.recentTransactions.map(t => `- ${t.date}: ${t.category} (R$ ${t.amount}) [${t.type}]`).join('\n')}
       
       Tone: Professional, minimalist, tech-forward, helpful.
       
       When the user asks to perform an action, call the appropriate tool.
-      If the user asks about investments, you can answer generally or suggest they use the search feature for real-time data.
+      If creating a task that involves paying something (like "Pay rent" or "Buy groceries"), ALWAYS use the 'financial_impact' parameter in 'createTask' to specify the cost.
     `;
 
     const tools: Tool[] = [{
@@ -153,7 +192,7 @@ export class GeminiService {
       if (functionCalls && functionCalls.length > 0) {
         for (const call of functionCalls) {
           const args = call.args as any;
-          
+
           if (call.name === 'createTransaction') {
             actionCallbacks.onTransaction({
               amount: args.amount,
@@ -162,21 +201,22 @@ export class GeminiService {
               type: args.type as 'income' | 'expense',
               date: args.date || new Date().toISOString()
             });
-            replyText = `I've registered a ${args.type} of $${args.amount} for ${args.category}.`;
+            replyText = `I've registered a ${args.type} of R$${args.amount} for ${args.category}.`;
           } else if (call.name === 'createGoal') {
             actionCallbacks.onGoal({
               title: args.title,
               targetAmount: args.targetAmount,
               deadline: args.deadline || new Date(Date.now() + 86400000 * 30).toISOString()
             });
-            replyText = `New goal created: ${args.title} with a target of $${args.targetAmount}.`;
+            replyText = `New goal created: ${args.title} with a target of R$${args.targetAmount}.`;
           } else if (call.name === 'createTask') {
             actionCallbacks.onTask({
               title: args.title,
               assignee: args.assignee as any,
               deadline: args.deadline || new Date().toISOString(),
               priority: args.priority as any,
-              linkedGoalId: args.linkedGoalId
+              linkedGoalId: args.linkedGoalId,
+              financial_impact: args.financial_impact || 0
             });
             replyText = `Task assigned to ${args.assignee}: ${args.title}.`;
           } else if (call.name === 'createEvent') {
@@ -227,10 +267,10 @@ export class GeminiService {
           temperature: 0.5
         }
       });
-      
+
       const grounding = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
       const text = response.text;
-      
+
       return { text, grounding };
     } catch (error) {
       console.error("Investment Chat Error:", error);
