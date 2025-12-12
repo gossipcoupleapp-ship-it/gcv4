@@ -105,7 +105,8 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, onFinish }) => {
           full_name: data.userName,
           income: parseFloat(data.monthlyIncome || '0'),
           income_date: parseInt(data.incomeReceiptDate || '1'),
-          avatar_url: avatarUrl
+          avatar_url: avatarUrl,
+          onboarding_completed: true
         })
         .eq('id', user.id);
 

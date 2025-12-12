@@ -142,6 +142,27 @@ const App: React.FC = () => {
 
         if (couple) {
           setCoupleId(couple.id);
+
+          // --- STATE GUARDS ---
+
+          // 1. Payment Guard (P1 Only)
+          if (profile.role === 'P1' && !couple.is_premium) {
+            console.log("Blocking: Payment required");
+            setCurrentView('CHECKOUT');
+            setLoading(false);
+            return;
+          }
+
+          // 2. Onboarding Guard
+          if (!profile.onboarding_completed) {
+            console.log("Blocking: Onboarding incomplete");
+            setCurrentView('ONBOARDING');
+            setLoading(false);
+            return;
+          }
+
+          // --------------------
+
           // 3. Get Partner Profile
           const { data: partnerProfile } = await supabase.from('profiles').select('*').eq('couple_id', couple.id).neq('id', user.id).maybeSingle();
 
@@ -165,12 +186,15 @@ const App: React.FC = () => {
               user2: profile.role === 'P2' ? { name: profile.full_name, email: profile.email, monthlyIncome: profile.monthly_income, incomeReceiptDate: profile.income_receipt_day } : (partnerProfile ? { name: partnerProfile.full_name, email: partnerProfile.email, monthlyIncome: partnerProfile.monthly_income, incomeReceiptDate: partnerProfile.income_receipt_day } : { name: 'P2', email: '', monthlyIncome: '0', incomeReceiptDate: '1' }),
               coupleName: couple.name,
               riskTolerance: (profile.risk_profile as any) || 'medium',
-              inviteLink: window.location.origin + '/invite/' + couple.id // Simple link generation
+              inviteLink: window.location.origin + '/invite/' + couple.id
             }
           });
           setCurrentView('APP');
         } else {
-          // Onboarding flow if no couple
+          // Onboarding flow if no couple (Case: just signed up, RPC logic might have failed or pending)
+          // But actually, for P1, couple creation is usually synchronous in RPC.
+          // For P2, might be different.
+          // If no couple, default to Onboarding to handle creation/joining.
           setCurrentView('ONBOARDING');
         }
 
@@ -217,7 +241,8 @@ const App: React.FC = () => {
       full_name: data.userName,
       monthly_income: parseFloat(data.monthlyIncome),
       income_receipt_day: parseInt(data.incomeReceiptDate),
-      risk_profile: data.riskProfile
+      risk_profile: data.riskProfile,
+      onboarding_completed: true
       // avatar_url...
     }).eq('id', user.id);
 
