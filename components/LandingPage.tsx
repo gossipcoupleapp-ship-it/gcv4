@@ -154,36 +154,33 @@ const LandingPage: React.FC<LandingPageProps> = ({ onAuthSuccess }) => {
             console.log("Perfil já existe. Redirecionando...");
             onAuthSuccess((existingProfile.role as 'P1' | 'P2') || 'P1');
           } else {
-            // Cenário B: Usuário Zumbi (Auth ok, Profile missing). Vamos criar.
-            console.log("Perfil não encontrado. Criando dados do casal...");
+            // Cenário B: Usuário Zumbi (Auth ok, Profile missing). Vamos criar via RPC.
+            console.log("Perfil não encontrado. Criando dados do casal via RPC...");
 
-            // Cria Casal
-            const { data: couple, error: coupleError } = await supabase
-              .from('couples')
-              .insert({
-                name: 'My Couple',
-                subscription_status: 'trialing'
-              })
-              .select()
-              .single();
+            // 1. RPC segura que cria o casal e tenta vincular (bypass RLS)
+            const { data: coupleId, error: rpcError } = await supabase.rpc('create_couple_and_link', {
+              couple_name: 'My Couple',
+              risk_profile: 'medium'
+            });
 
-            if (coupleError) throw coupleError;
+            if (rpcError) throw rpcError;
 
-            if (couple) {
-              // Cria Perfil
-              const { error: profileError } = await supabase
-                .from('profiles')
-                .insert({
-                  id: user.id,
-                  couple_id: couple.id,
-                  role: 'P1',
-                  email: email,
-                  full_name: 'User', // Placeholder
-                  risk_profile: 'medium'
-                });
+            // 2. Garante a criação/atualização do perfil com os dados restantes (Email, Nome, Role)
+            // O RPC tenta dar update, mas se o perfil não existir (ex: falha na trigger de signup),
+            // este upsert cria o registro corretamente, já com o couple_id válido.
+            const { error: profileError } = await supabase
+              .from('profiles')
+              .upsert({
+                id: user.id,
+                couple_id: coupleId,
+                role: 'P1',
+                email: email,
+                full_name: 'User',
+                risk_profile: 'medium'
+              });
 
-              if (profileError) throw profileError;
-            }
+            if (profileError) throw profileError;
+
             onAuthSuccess('P1');
           }
         }
