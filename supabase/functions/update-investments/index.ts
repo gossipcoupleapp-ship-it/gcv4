@@ -15,7 +15,7 @@ Deno.serve(async (req) => {
         // 0. Setup Supabase Admin (Bypass RLS)
         const supabaseAdmin = createClient(
             Deno.env.get('SUPABASE_URL') ?? '',
-            Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+            Deno.env.get('SERVICE_ROLE_KEY') ?? ''
         )
 
         // 1. Get unique symbols

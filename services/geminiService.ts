@@ -4,7 +4,7 @@ import { GoogleGenAI, Type, FunctionDeclaration, Tool } from "@google/genai";
 import { AppState, Transaction, Goal, Task, CalendarEvent } from "../types";
 import { supabase } from "../src/lib/supabase";
 
-const apiKey = process.env.API_KEY || '';
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
 const ai = new GoogleGenAI({ apiKey });
 
 // Tool Definitions
