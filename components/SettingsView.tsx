@@ -107,14 +107,52 @@ const SettingsView: React.FC<SettingsViewProps> = ({
       setActiveModal('COUPLE_PROFILE');
    };
 
-   const handleSaveUser = (role: 'user1' | 'user2') => {
-      onUpdateUser(role, editUserForm);
-      closeModal();
+   const handleSaveUser = async (role: 'user1' | 'user2') => {
+      try {
+         const { data: { user } } = await supabase.auth.getUser();
+         if (!user) return;
+
+         await supabase
+            .from('profiles')
+            .update({
+               full_name: editUserForm.name,
+               income: parseFloat(String(editUserForm.monthlyIncome || '0')),
+               income_date: parseInt(String(editUserForm.incomeReceiptDate || '1'))
+               // Note: Avatar separate flow usually, but could be added here if we had the file
+            })
+            .eq('id', user.id);
+
+         // Optimistic / Local Update via Parent
+         onUpdateUser(role, editUserForm);
+         closeModal();
+      } catch (err) {
+         console.error("Error saving user profile:", err);
+         alert("Erro ao salvar perfil.");
+      }
    };
 
-   const handleSaveCouple = () => {
-      onUpdateCouple(editCoupleForm);
-      closeModal();
+   const handleSaveCouple = async () => {
+      try {
+         const { data: { user } } = await supabase.auth.getUser();
+         // Resolve couple_id from user's profile
+         const { data: profile } = await supabase.from('profiles').select('couple_id').eq('id', user?.id).single();
+
+         if (profile?.couple_id) {
+            await supabase
+               .from('couples')
+               .update({
+                  name: editCoupleForm.coupleName,
+                  financial_risk_profile: editCoupleForm.riskTolerance
+               })
+               .eq('id', profile.couple_id);
+
+            onUpdateCouple(editCoupleForm);
+            closeModal();
+         }
+      } catch (err) {
+         console.error("Error saving couple profile:", err);
+         alert("Erro ao salvar perfil do casal.");
+      }
    };
 
    const handleSavePayment = () => {
@@ -410,7 +448,9 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                         <h3 className="text-xl font-bold">Gossip Couple Premium</h3>
                         <p className="text-white/80 text-sm">Plano Anual</p>
                      </div>
-                     <span className="bg-white/20 backdrop-blur-md px-3 py-1 rounded-full text-xs font-bold border border-white/30">Ativo</span>
+                     <span className={`px-3 py-1 rounded-full text-xs font-bold border ${state.userProfile.subscriptionStatus === 'active' ? 'bg-white/20 border-white/30' : 'bg-red-500/50 border-red-400'}`}>
+                        {state.userProfile.subscriptionStatus === 'active' ? 'Ativo' : 'Inativo/Trial'}
+                     </span>
                   </div>
                   <div className="flex items-end gap-1 mb-6">
                      <span className="text-3xl font-bold">R$ 29,90</span>
