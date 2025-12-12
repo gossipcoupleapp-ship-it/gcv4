@@ -64,6 +64,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onAuthSuccess }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Simulation state for P2 Invite
   const [isP2Invite, setIsP2Invite] = useState(false);
@@ -85,6 +86,11 @@ const LandingPage: React.FC<LandingPageProps> = ({ onAuthSuccess }) => {
 
   const handleSignupSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
+    setIsSubmitting(true);
+    setError('');
+
     try {
       if (isP2Invite) {
         // P2 Logic: Just sign up, association happens via invite link/token later
@@ -92,49 +98,101 @@ const LandingPage: React.FC<LandingPageProps> = ({ onAuthSuccess }) => {
           email,
           password,
         });
-        if (error) throw error;
+        if (error) {
+          // Se já existe, tenta logar para não travar o usuário
+          if (error.message.includes('already registered') || error.status === 422) {
+            const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+            if (signInError) throw new Error('Conta já existe. Tente entrar, mas a senha parece incorreta.');
+            // Se logou, prossegue como sucesso
+          } else {
+            throw error;
+          }
+        }
         onAuthSuccess('P2');
       } else {
-        // P1 Logic: Sign up
+        // P1 Logic: Sign Up with Resilience
+        let user = null;
+
+        // 1. Tenta Criar Conta
         const { data: authData, error: authError } = await supabase.auth.signUp({
           email,
           password,
         });
-        if (authError) throw authError;
 
-        if (authData.user) {
-          // Create Couple (Note: RLS might need adjustment for this to work on client-side)
-          const { data: couple, error: coupleError } = await supabase
-            .from('couples')
-            .insert({
-              name: 'My Couple',
-              subscription_status: 'trialing'
-            })
-            .select()
-            .single();
+        // 2. Trata Erro "Already Registered"
+        if (authError) {
+          if (authError.message?.includes('already registered') || authError.status === 422) {
+            console.log("Usuário já existe. Tentando login de recuperação...");
+            const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+              email,
+              password
+            });
 
-          if (coupleError) {
-            console.error('Error creating couple:', coupleError);
-            // Fallback or error handling
-          } else if (couple) {
-            // Create Profile
-            const { error: profileError } = await supabase
-              .from('profiles')
+            if (signInError) {
+              // Se a senha estiver errada, não podemos fazer nada, é erro mesmo.
+              throw new Error('Este email já está cadastrado. Tente fazer Login.');
+            }
+            user = signInData.user;
+          } else {
+            throw authError;
+          }
+        } else {
+          user = authData.user;
+        }
+
+        if (user) {
+          // 3. Verificação de Estado (Profile Check)
+          // Verifica se o perfil JÁ existe para evitar erro 406 ou duplicação
+          const { data: existingProfile } = await supabase
+            .from('profiles')
+            .select('id, role')
+            .eq('id', user.id)
+            .maybeSingle();
+
+          if (existingProfile) {
+            // Cenário A: Tudo certo, usuário só estava confuso. Redireciona.
+            console.log("Perfil já existe. Redirecionando...");
+            onAuthSuccess((existingProfile.role as 'P1' | 'P2') || 'P1');
+          } else {
+            // Cenário B: Usuário Zumbi (Auth ok, Profile missing). Vamos criar.
+            console.log("Perfil não encontrado. Criando dados do casal...");
+
+            // Cria Casal
+            const { data: couple, error: coupleError } = await supabase
+              .from('couples')
               .insert({
-                id: authData.user.id,
-                couple_id: couple.id,
-                role: 'P1',
-                email: email,
-                full_name: 'User', // Placeholder
-                risk_profile: 'medium'
-              });
-            if (profileError) console.error('Error creating profile:', profileError);
+                name: 'My Couple',
+                subscription_status: 'trialing'
+              })
+              .select()
+              .single();
+
+            if (coupleError) throw coupleError;
+
+            if (couple) {
+              // Cria Perfil
+              const { error: profileError } = await supabase
+                .from('profiles')
+                .insert({
+                  id: user.id,
+                  couple_id: couple.id,
+                  role: 'P1',
+                  email: email,
+                  full_name: 'User', // Placeholder
+                  risk_profile: 'medium'
+                });
+
+              if (profileError) throw profileError;
+            }
+            onAuthSuccess('P1');
           }
         }
-        onAuthSuccess('P1');
       }
     } catch (err: any) {
+      console.error("Erro no cadastro:", err);
       setError(err.message || 'Erro ao criar conta.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
