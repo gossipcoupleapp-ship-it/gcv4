@@ -159,8 +159,8 @@ const LandingPage: React.FC<LandingPageProps> = ({ onAuthSuccess }) => {
 
             // 1. RPC segura que cria o casal e tenta vincular (bypass RLS)
             const { data: coupleId, error: rpcError } = await supabase.rpc('create_couple_and_link', {
-              couple_name: 'My Couple',
-              risk_profile: 'medium'
+              p_couple_name: 'My Couple',
+              p_risk_profile: 'medium'
             });
 
             if (rpcError) throw rpcError;
