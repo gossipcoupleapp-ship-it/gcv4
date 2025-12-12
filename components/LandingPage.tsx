@@ -965,17 +965,17 @@ const LandingPage: React.FC<LandingPageProps> = ({ onAuthSuccess }) => {
       {/* Demo Video Section */}
       <section className="py-16 md:py-24 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="bg-gray-900 rounded-[2rem] md:rounded-[3rem] overflow-hidden shadow-2xl relative min-h-[300px] md:min-h-[500px] flex items-center justify-center">
-            <div className="absolute inset-0 bg-gradient-to-br from-gray-900 to-gray-800 opacity-90"></div>
-            <img src="https://images.unsplash.com/photo-1611162617474-5b21e879e113?ixlib=rb-4.0.3&auto=format&fit=crop&w=1974&q=80" alt="Demo Background" className="absolute inset-0 w-full h-full object-cover opacity-40 mix-blend-overlay" />
-
-            <div className="relative z-10 text-center px-4">
-              <div className="w-16 h-16 md:w-24 md:h-24 bg-white rounded-full flex items-center justify-center mx-auto mb-6 md:mb-8 cursor-pointer hover:scale-110 transition-transform shadow-xl">
-                <Play className="w-8 h-8 md:w-10 md:h-10 text-primary-start ml-2 fill-current" />
-              </div>
-              <h2 className="text-2xl md:text-4xl font-bold text-white mb-2 md:mb-4">Veja em Ação</h2>
-              <p className="text-gray-300 text-sm md:text-lg max-w-xl mx-auto">Descubra como o Gossip Couple simplifica a vida financeira do casal em menos de 2 minutos.</p>
-            </div>
+          <div className="w-full aspect-video rounded-[2rem] md:rounded-[3rem] overflow-hidden shadow-2xl relative bg-black">
+            <iframe
+              width="100%"
+              height="100%"
+              src="https://www.youtube.com/embed/80tr5oYM27E?rel=0"
+              title="Gossip Couple Demo"
+              frameBorder="0"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+              className="absolute inset-0 w-full h-full"
+            ></iframe>
           </div>
         </div>
       </section>

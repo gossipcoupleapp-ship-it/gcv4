@@ -48,6 +48,18 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, onFinish }) => {
     setStep(step + 1);
   };
 
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        if (e.target?.result) {
+          setData({ ...data, profileImage: e.target.result as string });
+        }
+      };
+      reader.readAsDataURL(e.target.files[0]);
+    }
+  };
+
   // --- SUPABASE PERSISTENCE ---
 
   const uploadAvatar = async (base64Image: string, userId: string): Promise<string | null> => {
@@ -439,13 +451,17 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, onFinish }) => {
       <h2 className="text-2xl font-bold text-gray-900">Como usar a plataforma</h2>
       <p className="text-gray-500 -mt-2 mb-4">Um guia rápido de 1 minuto.</p>
 
-      <div className="relative aspect-video bg-gray-900 rounded-2xl overflow-hidden shadow-xl group cursor-pointer">
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="w-16 h-16 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-            <Play size={32} className="text-white fill-white ml-1" />
-          </div>
-        </div>
-        <img src="https://images.unsplash.com/photo-1516321318423-f06f85e504b3?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80" className="w-full h-full object-cover opacity-60" alt="Tutorial" />
+      <div className="w-full aspect-video rounded-2xl overflow-hidden shadow-xl bg-black">
+        <iframe
+          width="100%"
+          height="100%"
+          src="https://www.youtube.com/embed/80tr5oYM27E?rel=0"
+          title="Gossip Couple Tutorial"
+          frameBorder="0"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+          className="w-full h-full"
+        ></iframe>
       </div>
 
       <button
