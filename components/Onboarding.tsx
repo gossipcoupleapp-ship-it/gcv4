@@ -39,6 +39,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
   });
   const [inviteLink, setInviteLink] = useState('');
   const [loadingInvite, setLoadingInvite] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
 
   // Persistence: Load State
   React.useEffect(() => {
@@ -56,7 +57,11 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
 
   // Persistence: Save State
   React.useEffect(() => {
-    localStorage.setItem('gossip_onboarding_backup', JSON.stringify({ data, step }));
+    try {
+      localStorage.setItem('gossip_onboarding_backup', JSON.stringify({ data, step }));
+    } catch (e) {
+      console.warn("Storage quota exceeded, skipping backup", e);
+    }
   }, [data, step]);
 
   // Fetch Invite Link for P1 when reaching step 7
@@ -89,41 +94,32 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
     setStep(step + 1);
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        if (e.target?.result) {
-          setData({ ...data, profileImage: e.target.result as string });
-        }
-      };
-      reader.readAsDataURL(e.target.files[0]);
-    }
-  };
+      const file = e.target.files[0];
+      setUploadingImage(true);
+      try {
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${Date.now()}.${fileExt}`;
+        const filePath = `${fileName}`;
 
-  // --- SUPABASE PERSISTENCE ---
+        const { error: uploadError } = await supabase.storage
+          .from('avatars')
+          .upload(filePath, file);
 
-  const uploadAvatar = async (base64Image: string, userId: string): Promise<string | null> => {
-    try {
-      // Convert Base64 to Blob
-      const res = await fetch(base64Image);
-      const blob = await res.blob();
-      const fileName = `${userId}-${Date.now()}.png`;
+        if (uploadError) throw uploadError;
 
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(fileName, blob, { upsert: true });
+        const { data: { publicUrl } } = supabase.storage
+          .from('avatars')
+          .getPublicUrl(filePath);
 
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('avatars')
-        .getPublicUrl(fileName);
-
-      return publicUrl;
-    } catch (err) {
-      console.error("Avatar Upload Error:", err);
-      return null;
+        setData({ ...data, profileImage: publicUrl });
+      } catch (error) {
+        console.error('Error uploading avatar:', error);
+        alert('Erro ao fazer upload da imagem.');
+      } finally {
+        setUploadingImage(false);
+      }
     }
   };
 
@@ -132,12 +128,8 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("No authenticated user");
 
-      // 1. Upload Image (if exists)
-      let avatarUrl = data.profileImage;
-      if (data.profileImage && data.profileImage.startsWith('data:')) {
-        const uploadedUrl = await uploadAvatar(data.profileImage, user.id);
-        if (uploadedUrl) avatarUrl = uploadedUrl;
-      }
+      // 1. Image is already uploaded (if setup correctly), so just use current URL
+      const avatarUrl = data.profileImage;
 
       // 2. Update Profile
       const { error: profileError } = await (supabase
@@ -260,13 +252,15 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
           <div className="w-32 h-32 rounded-full bg-gray-100 border-4 border-white shadow-xl flex items-center justify-center overflow-hidden">
             {data.profileImage ? (
               <img src={data.profileImage} alt="Profile" className="w-full h-full object-cover" />
+            ) : uploadingImage ? (
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-mid"></div>
             ) : (
               <User size={48} className="text-gray-300" />
             )}
           </div>
-          <label className="absolute bottom-0 right-0 bg-primary-mid text-white p-3 rounded-full shadow-lg cursor-pointer hover:bg-primary-start transition-all hover:scale-110">
+          <label className={`absolute bottom-0 right-0 bg-primary-mid text-white p-3 rounded-full shadow-lg cursor-pointer hover:bg-primary-start transition-all hover:scale-110 ${uploadingImage ? 'opacity-50 cursor-not-allowed' : ''}`}>
             <Upload size={18} />
-            <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+            <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} disabled={uploadingImage} />
           </label>
         </div>
       </div>
