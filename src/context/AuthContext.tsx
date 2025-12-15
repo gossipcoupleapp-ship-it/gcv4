@@ -3,25 +3,26 @@ import { supabase } from '../lib/supabase';
 import { Session, User } from '@supabase/supabase-js';
 
 // Types derived from DB
+// Transformed Profile Type (CamelCase for Frontend)
 export interface Profile {
     id: string;
-    couple_id: string | null;
-    full_name: string | null;
+    coupleId: string | null;
+    name: string | null;
     email: string | null;
     role: 'P1' | 'P2' | null;
-    monthly_income: number;
-    income_receipt_day: number | null;
-    risk_profile: 'low' | 'medium' | 'high' | null;
-    onboarding_completed: boolean;
-    avatar_url?: string | null;
+    monthlyIncome: number;
+    incomeReceiptDate: number | null;
+    riskProfile: 'low' | 'medium' | 'high' | null;
+    onboardingCompleted: boolean;
+    avatarUrl?: string | null;
 }
 
 export interface Couple {
     id: string;
     name: string | null;
-    subscription_status: 'active' | 'inactive' | 'trialing' | 'past_due' | 'canceled';
-    stripe_customer_id: string | null;
-    stripe_subscription_id?: string | null;
+    subscriptionStatus: 'active' | 'inactive' | 'trialing' | 'past_due' | 'canceled';
+    stripeCustomerId: string | null;
+    stripeSubscriptionId?: string | null;
 }
 
 interface AuthContextType {
@@ -52,30 +53,54 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const fetchProfileAndCouple = async (userId: string) => {
         try {
             // 1. Get Profile
-            const { data: profileData, error: profileError } = await supabase
+            const { data: dbProfile, error: profileError } = await supabase
                 .from('profiles')
                 .select('*')
                 .eq('id', userId)
                 .single();
 
-            if (profileError) {
-                // If profile doesn't exist (race condition on signup?), it might be created by trigger or manual insert later.
-                console.warn("Profile fetch warning:", profileError);
+            if (profileError || !dbProfile) {
+                console.warn("Profile fetch warning:", profileError || "No profile found");
                 return;
             }
 
-            setProfile(profileData as Profile);
+            const rawProfile = dbProfile as any;
+
+            // TRANSFORM: DB (snake_case) -> Frontend (camelCase)
+            const mappedProfile: Profile = {
+                id: rawProfile.id,
+                coupleId: rawProfile.couple_id,
+                name: rawProfile.full_name, // Fixes name display issue
+                email: rawProfile.email,
+                role: rawProfile.role,
+                monthlyIncome: rawProfile.monthly_income,
+                incomeReceiptDate: rawProfile.income_receipt_day || rawProfile.income_date, // Handle both potential DB columns
+                riskProfile: rawProfile.risk_profile,
+                onboardingCompleted: rawProfile.onboarding_completed,
+                avatarUrl: rawProfile.avatar_url
+            };
+
+            setProfile(mappedProfile);
 
             // 2. Get Couple (if exists)
-            if (profileData.couple_id) {
-                const { data: coupleData, error: coupleError } = await supabase
+            if (rawProfile.couple_id) {
+                const { data: dbCouple, error: coupleError } = await supabase
                     .from('couples')
                     .select('*')
-                    .eq('id', profileData.couple_id)
+                    .eq('id', rawProfile.couple_id)
                     .single();
 
-                if (!coupleError) {
-                    setCouple(coupleData as Couple);
+                if (!coupleError && dbCouple) {
+                    const rawCouple = dbCouple as any;
+                    // TRANSFORM Couple
+                    const mappedCouple: Couple = {
+                        id: rawCouple.id,
+                        name: rawCouple.name,
+                        subscriptionStatus: rawCouple.subscription_status,
+                        stripeCustomerId: rawCouple.stripe_customer_id,
+                        stripeSubscriptionId: rawCouple.stripe_subscription_id
+                    };
+                    setCouple(mappedCouple);
                 }
             } else {
                 setCouple(null);
@@ -115,7 +140,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return () => subscription.unsubscribe();
     }, []);
 
-    // 3. Realtime Subscription (Listen for Profile/Couple updates - crucial for webhook flows)
+    // 3. Realtime Subscription
     useEffect(() => {
         if (!user) return;
 
@@ -126,7 +151,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${user.id}` },
                 (payload) => {
                     console.log('Realtime Profile Update:', payload);
-                    fetchProfileAndCouple(user.id); // Re-fetch to be safe and get relations
+                    fetchProfileAndCouple(user.id);
                 }
             )
             .subscribe();
@@ -139,8 +164,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Derived State
     const isP1 = profile?.role === 'P1';
     const isP2 = profile?.role === 'P2';
-    const subscriptionActive = couple?.subscription_status === 'active' || couple?.subscription_status === 'trialing';
-    const onboardingCompleted = !!profile?.onboarding_completed;
+    const subscriptionActive = couple?.subscriptionStatus === 'active' || couple?.subscriptionStatus === 'trialing';
+    const onboardingCompleted = !!profile?.onboardingCompleted;
 
     const value = {
         session,

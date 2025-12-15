@@ -94,7 +94,7 @@ const MainApp: React.FC = () => {
         userProfile: {
           ...prev.userProfile,
           coupleName: couple.name || 'Seu Casal',
-          riskTolerance: (profile.risk_profile as any) || 'medium',
+          riskTolerance: (profile.riskProfile as any) || 'medium',
           inviteLink: `${window.location.origin}?token=...`
         }
       }));
@@ -350,7 +350,7 @@ const MainApp: React.FC = () => {
           <div onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)} className="flex items-center p-2 rounded-xl hover:bg-gray-50 cursor-pointer">
             <UserCircle size={20} className="text-gray-500" />
             <div className="hidden lg:block ml-3">
-              <p className="text-sm font-medium">{profile.full_name}</p>
+              <p className="text-sm font-medium">{profile.name}</p>
               <p className="text-xs text-gray-400">{couple?.name}</p>
             </div>
           </div>

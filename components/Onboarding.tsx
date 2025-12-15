@@ -110,7 +110,56 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
 
 
   // 5. Handlers
-  const handleNext = () => setStep(prev => prev + 1);
+
+  // Progressive Save Helper
+  const saveToDatabase = async (currentData: OnboardingData) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // 1. Map to DB Schema (Snake Case)
+      const updates: any = {
+        full_name: currentData.userName,
+        // Only parse if set to avoid NaN
+        monthly_income: currentData.monthlyIncome ? parseFloat(currentData.monthlyIncome) : null,
+        income_receipt_day: currentData.incomeReceiptDate ? parseInt(currentData.incomeReceiptDate) : null,
+        avatar_url: currentData.profileImage,
+        role: userRole // Ensure role is kept sync
+      };
+
+      // 2. Update Profile
+      const { error: profileError } = await (supabase.from('profiles') as any)
+        .update(updates)
+        .eq('id', user.id);
+
+      if (profileError) throw profileError;
+
+      // 3. Update Couple (P1 Only & if name exists)
+      if (userRole === 'P1' && currentData.coupleName) {
+        // Get couple_id from profile
+        const { data: profile } = await (supabase.from('profiles') as any).select('couple_id').eq('id', user.id).maybeSingle();
+
+        if (profile?.couple_id) {
+          await (supabase.from('couples') as any)
+            .update({
+              name: currentData.coupleName,
+              financial_risk_profile: currentData.riskProfile
+            })
+            .eq('id', profile.couple_id);
+        }
+      }
+
+    } catch (err) {
+      console.error("Progressive Save Error:", err);
+      // Silent fail or toast? For now silent to not block flow, detailed log
+    }
+  };
+
+  const handleNext = async () => {
+    // Save before moving next
+    await saveToDatabase(data);
+    setStep(prev => prev + 1);
+  };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -137,7 +186,11 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
           .getPublicUrl(filePath);
 
         // Store URL Only
-        setData(prev => ({ ...prev, profileImage: publicUrl }));
+        const newData = { ...data, profileImage: publicUrl };
+        setData(newData);
+
+        // Auto-save image link to DB immediately
+        await saveToDatabase(newData);
 
       } catch (error) {
         console.error('Error uploading avatar:', error);
@@ -150,7 +203,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
 
   const handleFinish = async () => {
     try {
-      // Clear Storage FIRST to prevent zombie state on next reload
+      // Clear Storage FIRST
       try {
         localStorage.removeItem(STORAGE_KEY);
       } catch (e) { console.error("Error clearing storage:", e); }
@@ -158,36 +211,22 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("No authenticated user");
 
-      // Update Profile in DB
-      const { error: profileError } = await (supabase
-        .from('profiles') as any)
+      // Final Save to ensure everything is synced
+      // Explicitly set onboarding_completed here
+      const { error: profileError } = await (supabase.from('profiles') as any)
         .update({
+          onboarding_completed: true,
+          // Re-send key fields just in case
           full_name: data.userName,
-          income: parseFloat(data.monthlyIncome || '0'),
-          income_date: parseInt(data.incomeReceiptDate || '1'),
-          avatar_url: data.profileImage, // Now just a URL string
-          onboarding_completed: true
+          monthly_income: data.monthlyIncome ? parseFloat(data.monthlyIncome) : null,
+          income_receipt_day: data.incomeReceiptDate ? parseInt(data.incomeReceiptDate) : null,
+          avatar_url: data.profileImage
         })
         .eq('id', user.id);
 
       if (profileError) throw profileError;
 
-      // Update Couple (P1 Only)
-      if (userRole === 'P1' && data.coupleName) {
-        // Need to find couple_id first
-        const { data: profile } = await (supabase.from('profiles') as any).select('couple_id').eq('id', user.id).maybeSingle();
-        if (profile?.couple_id) {
-          await (supabase
-            .from('couples') as any)
-            .update({
-              name: data.coupleName,
-              financial_risk_profile: data.riskProfile
-            })
-            .eq('id', profile.couple_id);
-        }
-      }
-
-      // Join Couple (P2 Only)
+      // Join Couple (P2 Only) - Logic remains same
       if (userRole === 'P2' && inviteToken) {
         const { error: joinError } = await supabase.functions.invoke('invite-manager', {
           body: {
@@ -202,10 +241,8 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
       onFinish(data);
 
     } catch (err) {
-      console.error("Onboarding Save Error:", err);
-      // Restore state in case of error so user doesn't lose data?
-      // For now, simple alert.
-      alert("Erro ao salvar dados. Seus dados locais estão salvos, tente finalizar novamente.");
+      console.error("Onboarding Finish Error:", err);
+      alert("Erro ao finalizar. Seus dados foram salvos parcialmente. Tente novamente.");
     }
   };
 
