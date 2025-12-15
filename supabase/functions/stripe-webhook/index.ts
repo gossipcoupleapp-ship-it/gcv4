@@ -1,10 +1,8 @@
-
-import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import Stripe from "https://esm.sh/stripe@14.21.0?target=deno";
 
 const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY") ?? "", {
-    apiVersion: "2023-10-16",
     httpClient: Stripe.createFetchHttpClient(),
 });
 
@@ -14,97 +12,80 @@ serve(async (req) => {
     const signature = req.headers.get("Stripe-Signature");
 
     if (!signature) {
-        return new Response("No signature", { status: 400 });
+        return new Response("No Stripe signature found", { status: 400 });
     }
 
-    const body = await req.text();
-    const endpointSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET");
-
-    let event;
-
     try {
-        event = await stripe.webhooks.constructEventAsync(
+        const body = await req.text();
+        const event = await stripe.webhooks.constructEventAsync(
             body,
             signature,
-            endpointSecret ?? "",
+            Deno.env.get("STRIPE_WEBHOOK_SECRET") ?? "",
             undefined,
             cryptoProvider
         );
-    } catch (err) {
-        console.error(`Webhook signature verification failed: ${err.message}`);
-        return new Response(`Webhook Error: ${err.message}`, { status: 400 });
-    }
 
-    // Handle the event
-    if (event.type === 'checkout.session.completed') {
-        const session = event.data.object;
-        const customerEmail = session.customer_details?.email;
-        const customerId = session.customer;
+        if (event.type === "checkout.session.completed") {
+            const session = event.data.object;
+            const userId = session.client_reference_id;
+            const customerId = session.customer;
+            const subscriptionId = session.subscription;
 
-        if (customerEmail) {
-            // Initialize Supabase Admin
+            if (!userId) {
+                console.error("No client_reference_id (user_id) found in session");
+                return new Response("No user_id", { status: 400 });
+            }
+
+            // Initialize Supabase Admin Client (Service Role)
             const supabaseAdmin = createClient(
-                Deno.env.get('SUPABASE_URL') ?? '',
-                Deno.env.get('SERVICE_ROLE_KEY') ?? ''
+                Deno.env.get("SUPABASE_URL") ?? "",
+                Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
             );
 
-            // 1. Find User by Email
-            const { data: { users }, error: userError } = await supabaseAdmin.auth.admin.listUsers();
-            const user = users?.find(u => u.email === customerEmail);
+            console.log(`Processing P1 Signup for User: ${userId}`);
 
-            if (user) {
-                console.log(`User found: ${user.id}`);
+            // 1. Create Couple (Securely via Service Role)
+            // Note: Name might be null here, updated later in Onboarding.
+            const { data: couple, error: coupleError } = await supabaseAdmin
+                .from("couples")
+                .insert({
+                    stripe_customer_id: customerId,
+                    stripe_subscription_id: subscriptionId,
+                    subscription_status: "active", // Assume active on successful payment
+                    name: "Novo Casal", // Placeholder
+                })
+                .select()
+                .single();
 
-                // 2. Find Profile to get Couple ID
-                const { data: profile } = await supabaseAdmin
-                    .from('profiles')
-                    .select('couple_id')
-                    .eq('id', user.id)
-                    .single();
-
-                if (profile?.couple_id) {
-                    // 3. Update existing couple
-                    await supabaseAdmin
-                        .from('couples')
-                        .update({
-                            subscription_status: 'active',
-                            stripe_customer_id: customerId
-                        })
-                        .eq('id', profile.couple_id);
-                    console.log(`Updated couple ${profile.couple_id} to active.`);
-                } else {
-                    // 4. No couple? Create one! (Fallback for P1)
-                    console.log("Creating new couple for user...");
-                    const { data: newCouple, error: coupleError } = await supabaseAdmin
-                        .from('couples')
-                        .insert({
-                            name: 'My Couple',
-                            subscription_status: 'active',
-                            stripe_customer_id: customerId,
-                            financial_risk_profile: 'medium'
-                        })
-                        .select()
-                        .single();
-
-                    if (newCouple && !coupleError) {
-                        await supabaseAdmin
-                            .from('profiles')
-                            .update({ couple_id: newCouple.id, role: 'P1' })
-                            .eq('id', user.id);
-                        console.log(`Created couple ${newCouple.id} and linked to user ${user.id}`);
-                    } else {
-                        console.error("Failed to create couple:", coupleError);
-                    }
-                }
-            } else {
-                console.error(`User not found for email: ${customerEmail}`);
+            if (coupleError) {
+                console.error("Error creating couple:", coupleError);
+                return new Response("Error creating couple", { status: 500 });
             }
-        } else {
-            console.error("No customer email in session");
-        }
-    }
 
-    return new Response(JSON.stringify({ received: true }), {
-        headers: { "Content-Type": "application/json" },
-    });
+            // 2. Update Profile (Link to Couple, Set P1)
+            const { error: profileError } = await supabaseAdmin
+                .from("profiles")
+                .update({
+                    couple_id: couple.id,
+                    role: "P1",
+                    risk_profile: "medium", // Default
+                })
+                .eq("id", userId);
+
+            if (profileError) {
+                console.error("Error updating profile:", profileError);
+                return new Response("Error updating profile", { status: 500 });
+            }
+
+            console.log(`Successfully setup Couple ${couple.id} for P1 ${userId}`);
+        }
+
+        return new Response(JSON.stringify({ received: true }), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+        });
+    } catch (err) {
+        console.error(`Webhook Error: ${err.message}`);
+        return new Response(`Webhook Error: ${err.message}`, { status: 400 });
+    }
 });

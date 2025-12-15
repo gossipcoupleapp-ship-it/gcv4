@@ -21,10 +21,11 @@ import { supabase } from '../src/lib/supabase';
 
 interface OnboardingProps {
   userRole: UserRole;
+  inviteToken?: string;
   onFinish: (data: OnboardingData) => void;
 }
 
-const Onboarding: React.FC<OnboardingProps> = ({ userRole, onFinish }) => {
+const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish }) => {
   const [step, setStep] = useState(1);
   const [data, setData] = useState<OnboardingData>({
     userName: '',
@@ -36,13 +37,32 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, onFinish }) => {
     profileImage: undefined
   });
   const [inviteLink, setInviteLink] = useState('');
+  const [loadingInvite, setLoadingInvite] = useState(false);
 
-  // Generate a fake invite link on mount if P1
+  // Fetch Invite Link for P1 when reaching step 7
   React.useEffect(() => {
-    if (userRole === 'P1') {
-      setInviteLink(`https://app.gossipcouple.com/invite/${Math.random().toString(36).substring(7)}`);
+    if (userRole === 'P1' && step === 7 && !inviteLink) {
+      const fetchInvite = async () => {
+        setLoadingInvite(true);
+        try {
+          const { data, error } = await supabase.functions.invoke('invite-manager', {
+            body: { action: 'create_invite' }
+          });
+          if (error) throw error;
+          // Construct full URL. data.invite_token is the token.
+          // Assuming the link format:
+          const link = `${window.location.origin}/?token=${data.invite_token}`;
+          setInviteLink(link);
+        } catch (err) {
+          console.error("Error creating invite:", err);
+          setInviteLink("Erro ao gerar link. Tente recarregar.");
+        } finally {
+          setLoadingInvite(false);
+        }
+      };
+      fetchInvite();
     }
-  }, [userRole]);
+  }, [userRole, step, inviteLink]);
 
   const handleNext = () => {
     setStep(step + 1);
@@ -99,8 +119,8 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, onFinish }) => {
       }
 
       // 2. Update Profile
-      const { error: profileError } = await supabase
-        .from('profiles')
+      const { error: profileError } = await (supabase
+        .from('profiles') as any)
         .update({
           full_name: data.userName,
           income: parseFloat(data.monthlyIncome || '0'),
@@ -112,14 +132,12 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, onFinish }) => {
 
       if (profileError) throw profileError;
 
-      // 3. Update Couple (P1 only usually, but P2 can edit risk if we want. Spec says P1 sets Risk)
-      // We need couple_id. Let's fetch it or user has it? 
-      // We can get it from profile, but let's assume we are just updating the couple linked to this user.
+      // 3. Update Couple (P1 only)
       if (userRole === 'P1' && data.coupleName) {
-        const { data: profile } = await supabase.from('profiles').select('couple_id').eq('id', user.id).single();
+        const { data: profile } = await (supabase.from('profiles') as any).select('couple_id').eq('id', user.id).maybeSingle();
         if (profile?.couple_id) {
-          await supabase
-            .from('couples')
+          await (supabase
+            .from('couples') as any)
             .update({
               name: data.coupleName,
               financial_risk_profile: data.riskProfile
@@ -128,7 +146,19 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, onFinish }) => {
         }
       }
 
-      // 4. Finish
+      // 4. Join Couple (P2 only)
+      if (userRole === 'P2' && inviteToken) {
+        const { error: joinError } = await supabase.functions.invoke('invite-manager', {
+          body: {
+            action: 'join_couple',
+            invite_token: inviteToken
+          }
+        });
+
+        if (joinError) throw joinError;
+      }
+
+      // 5. Finish
       onFinish(data); // This triggers parent to re-fetch/redirect
 
     } catch (err) {
@@ -280,19 +310,26 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, onFinish }) => {
         <p className="text-gray-500 mt-2">Conecte seu Google Calendar para que a IA possa organizar seus compromissos.</p>
       </div>
 
-      <div
-        onClick={() => setData({ ...data, calendarConnected: !data.calendarConnected })}
-        className={`p-6 rounded-2xl border-2 cursor-pointer transition-all flex items-center gap-4 ${data.calendarConnected ? 'border-green-500 bg-green-50' : 'border-gray-200 bg-white hover:border-gray-300'}`}
+      <button
+        onClick={() => {
+          const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || 'YOUR_GOOGLE_CLIENT_ID';
+          const redirectUri = window.location.origin;
+          const scope = 'https://www.googleapis.com/auth/calendar';
+          // access_type=offline and prompt=consent are CRITICAL for receiving a refresh_token
+          const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&access_type=offline&prompt=consent`;
+          window.location.href = url;
+        }}
+        className={`p-6 rounded-2xl border-2 cursor-pointer transition-all flex items-center gap-4 w-full text-left ${data.calendarConnected ? 'border-green-500 bg-green-50' : 'border-gray-200 bg-white hover:border-gray-300'}`}
       >
         <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm">
           <img src="https://upload.wikimedia.org/wikipedia/commons/5/53/Google_%22G%22_Logo.svg" alt="G" className="w-6 h-6" />
         </div>
         <div className="flex-1">
           <h4 className="font-bold text-gray-800">Google Calendar</h4>
-          <p className="text-xs text-gray-500">{data.calendarConnected ? 'Conectado com sucesso' : 'Toque para conectar'}</p>
+          <p className="text-xs text-gray-500">{data.calendarConnected ? 'Conectado com sucesso' : 'Toque para conectar sua conta'}</p>
         </div>
         {data.calendarConnected && <CheckCircle className="text-green-600" size={24} />}
-      </div>
+      </button>
 
       <button
         onClick={handleNext}
@@ -412,8 +449,12 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, onFinish }) => {
         <p className="text-gray-500 mt-2">Envie o link para conectar as contas.</p>
       </div>
 
-      <div className="bg-gray-100 p-4 rounded-xl break-all text-xs text-gray-500 font-mono text-center">
-        {inviteLink}
+      <div className="bg-gray-100 p-4 rounded-xl break-all text-xs text-gray-500 font-mono text-center flex items-center justify-center min-h-[3rem]">
+        {loadingInvite ? (
+          <span className="animate-pulse">Gerando link exclusivo...</span>
+        ) : (
+          inviteLink
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-4">

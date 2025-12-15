@@ -1,199 +1,178 @@
-# Gossip Couple App - PWA Migration Specification
-**Status:** DRAFT
-**Version:** 1.0
 
-This document serves as the **Single Source of Truth** for migrating the Gossip Couple frontend prototype to a production-grade Agentic PWA backed by Supabase and Google Calendar.
+# Especificação Técnica: Gossip Couple/Sync
 
----
-
-## 1. User Stories & Core Flows
-
-### 1.1 The "Triad of Execution" (Unified Data Flow)
-A key differentiator is the tight coupling between Tasks, Finances, and Time.
-- **Trigger:** User creates a Task (e.g., "Renew Car Insurance").
-- **System Action:**
-  1.  **Task Record:** Created in `tasks` table.
-  2.  **Shadow Transaction:** If `financial_impact` > 0, system creates a `transactions` record with `status='pending'` and `type='expense'`.
-  3.  **Calendar Event:** System creates an `events` record (and syncs to Google Calendar) for the task deadline.
-- **Completion:**
-  - When User checks off the Task, they are prompted: "Did this cost $X as planned?"
-  - If "Yes": `transactions.status` -> `'paid'`.
-  - If "No": Transaction is deleted or updated.
-
-### 1.2 Onboarding Flow
-- **Partner 1 (The Initiator):**
-  1.  **Landing Page:** Clicks "Get Started".
-  2.  **Auth:** Sign up via Google (Supabase Auth).
-  3.  **Payment:** Stripe Checkout (Subscription).
-  4.  **Setup:** Sets `couple_name` and `risk_profile`.
-  5.  **Dashboard:** Land on main app.
-  6.  **Invite:** Generates a magic link for P2.
-
-- **Partner 2 (The Invitee):**
-  1.  **Link Entry:** Opens Invite Link.
-  2.  **Auth:** Sign up via Google.
-  3.  **Association:** System detects token, adds P2 to P1's `couple_id`.
-  4.  **Sync:** Prompts to connect Google Calendar.
-  5.  **Dashboard:** Accesses shared view.
+**Documento Mestre (Spec)**
+**Data:** 12/12/2025
+**Status:** Diagnóstico Concluído / Pronto para Refatoração
 
 ---
 
-## 2. Data Model (Supabase Schema)
+## 1. Status Atual (Diagnóstico de Arquitetura)
 
-All tables must include `created_at` (timestamptz) and `updated_at` (timestamptz).
+O sistema encontra-se funcional em termos de UI, mas híbrido em sua lógica de dados e vulnerável em integrações.
 
-### 2.1 Tables
+### 1.1 Frontend (UI/UX)
+*   **Componentes:** A interface (`App.tsx`, `Dashboard.tsx`, etc.) está robusta e estilizada.
+*   **Estado:** A aplicação ainda carrega lógica pesada de gerenciamento de estado ("God Component") em `App.tsx`.
+*   **Mock Data:** Os objetos de estado inicial (`INITIAL_STATE`) foram substituídos por chamadas Supabase, mas a tipagem ainda carrega vestígios de estruturas locais não-normalizadas.
+*   **PWA:** `manifest.json` existe, mas **não há Service Worker** ativo. A aplicação não funciona offline.
 
+### 1.2 Backend (Supabase)
+*   **Conexão:** Estabelecida (Project: `gossip-couple` / Ref: `fjiurznodfyhxzmqnkcc`).
+*   **Schema:** Tabelas essenciais existem, mas falta rigor na tipagem de `jsonb` e relacionamentos.
+*   **Segurança (RLS):**
+    *   ✅ Tenant Isolation implementado (`couple_id = couple_id()`).
+    *   ✅ Acesso cross-partner implementado em `profiles`.
+    *   ✅ Políticas padrão de `INSERT/SELECT/UPDATE` ativas.
+
+### 1.3 Integrações (Serviços)
+*   **Gemini AI:** ⚠️ **CRÍTICO.** A implementação atual (`geminiService.ts`) roda no cliente e expõe a `VITE_GEMINI_API_KEY`. Precisa ser migrada para Edge Functions.
+*   **Google Calendar:** A lógica de sincronização (`calendarService.ts`) tenta chamadas diretas à API do Google via cliente. Isso deve ser intermediado pelo backend para garantir persistência e renovação segura de tokens.
+
+---
+
+## 2. Schema Database Definitivo
+
+A estrutura abaixo valida e normaliza o que encontramos no banco, estabelecendo a "Tríade de Execução" (Tarefa ↔ Transação ↔ Meta).
+
+### 2.1 Tabelas Core
 ```sql
--- 1. Couples (Tenant)
-CREATE TABLE couples (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL,
-  subscription_status TEXT DEFAULT 'active', -- 'active', 'past_due', 'canceled'
-  stripe_customer_id TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+-- Identidade Central
+TABLE couples (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  subscription_status text, -- active, trailing, past_due
+  stripe_customer_id text,
+  created_at timestamptz DEFAULT now()
 );
 
--- 2. Profiles (Users)
-CREATE TABLE profiles (
-  id UUID PRIMARY KEY REFERENCES auth.users(id),
-  couple_id UUID REFERENCES couples(id),
-  role TEXT CHECK (role IN ('P1', 'P2')),
-  full_name TEXT,
-  email TEXT UNIQUE,
-  monthly_income NUMERIC(12, 2) DEFAULT 0,
-  income_receipt_day INT CHECK (income_receipt_day BETWEEN 1 AND 31),
-  calendar_sync_token TEXT, -- Encrypted Google Refresh Token
-  avatar_url TEXT,
-  risk_profile TEXT CHECK (risk_profile IN ('low', 'medium', 'high')),
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 3. Transactions (Financials)
-CREATE TABLE transactions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  couple_id UUID REFERENCES couples(id) NOT NULL,
-  user_id UUID REFERENCES profiles(id), -- Who paid/received
-  amount NUMERIC(12, 2) NOT NULL,
-  category TEXT NOT NULL,
-  description TEXT,
-  date TIMESTAMPTZ NOT NULL,
-  type TEXT CHECK (type IN ('income', 'expense')),
-  status TEXT CHECK (status IN ('pending', 'paid', 'cancelled')) DEFAULT 'paid',
-  linked_task_id UUID, -- For Shadow Transactions
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 4. Goals (Dreams)
-CREATE TABLE goals (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  couple_id UUID REFERENCES couples(id) NOT NULL,
-  title TEXT NOT NULL,
-  target_amount NUMERIC(12, 2) NOT NULL,
-  current_amount NUMERIC(12, 2) DEFAULT 0,
-  deadline DATE,
-  status TEXT CHECK (status IN ('in-progress', 'achieved', 'paused')),
-  category TEXT,
-  description TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 5. Tasks (Execution)
-CREATE TABLE tasks (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  couple_id UUID REFERENCES couples(id) NOT NULL,
-  title TEXT NOT NULL,
-  assignee_id UUID REFERENCES profiles(id), -- Nullable = 'both'
-  deadline TIMESTAMPTZ,
-  completed BOOLEAN DEFAULT FALSE,
-  financial_impact NUMERIC(12, 2), -- Optional cost associated
-  priority TEXT CHECK (priority IN ('low', 'medium', 'high')),
-  linked_goal_id UUID REFERENCES goals(id),
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 6. Events (Time)
-CREATE TABLE events (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  couple_id UUID REFERENCES couples(id) NOT NULL,
-  title TEXT NOT NULL,
-  start_time TIMESTAMPTZ NOT NULL,
-  end_time TIMESTAMPTZ NOT NULL,
-  type TEXT CHECK (type IN ('finance', 'social', 'work', 'task')),
-  google_event_id TEXT, -- For 2-way sync
-  assignee_id UUID REFERENCES profiles(id),
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 7. Investments (Assets)
-CREATE TABLE investments (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  couple_id UUID REFERENCES couples(id) NOT NULL,
-  symbol TEXT NOT NULL,
-  name TEXT NOT NULL,
-  quantity NUMERIC(12, 4) NOT NULL,
-  purchase_price NUMERIC(12, 2),
-  current_price NUMERIC(12, 2), -- Updated via tool/job
-  type TEXT CHECK (type IN ('stock', 'crypto', 'etf', 'reit')),
-  created_at TIMESTAMPTZ DEFAULT NOW()
+TABLE profiles (
+  id uuid PRIMARY KEY REFERENCES auth.users,
+  couple_id uuid REFERENCES couples,
+  full_name text,
+  role text, -- 'P1' | 'P2'
+  monthly_income numeric,
+  income_receipt_day integer,
+  risk_profile text, -- 'low' | 'medium' | 'high'
+  onboarding_completed boolean DEFAULT false,
+  avatar_url text
 );
 ```
 
-### 2.2 Security (RLS)
-- **Policy:** Users can ONLY SELECT/INSERT/UPDATE/DELETE rows where `couple_id` matches the `couple_id` found in their `profiles` record.
-- **Helper Function:**
-  ```sql
-  CREATE FUNCTION auth.couple_id() RETURNS UUID AS $$
-    SELECT couple_id FROM public.profiles WHERE id = auth.uid()
-  $$ LANGUAGE sql STABLE;
-  ```
-- **Example Policy (Transactions):**
-  ```sql
-  CREATE POLICY "Couple Isolation" ON transactions
-  USING (couple_id = auth.couple_id())
-  WITH CHECK (couple_id = auth.couple_id());
-  ```
+### 2.2 Tríade de Execução
+```sql
+-- 1. Metas (O Sonho)
+TABLE goals (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  couple_id uuid REFERENCES couples NOT NULL,
+  title text NOT NULL,
+  target_amount numeric NOT NULL,
+  current_amount numeric DEFAULT 0,
+  deadline timestamptz,
+  status text, -- 'in-progress' | 'achieved' | 'paused'
+  category text
+);
 
----
+-- 2. Tarefas (A Ação)
+TABLE tasks (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  couple_id uuid REFERENCES couples NOT NULL,
+  title text NOT NULL,
+  assignee_id uuid REFERENCES profiles(id), -- Quem executa
+  deadline timestamptz,
+  completed boolean DEFAULT false,
+  financial_impact numeric DEFAULT 0, -- Custo da tarefa (ex: pagar conta)
+  priority text,
+  linked_goal_id uuid REFERENCES goals(id) -- Conexão com o Sonho
+);
 
-## 3. PWA & Offline Strategy
+-- 3. Transações (O Resultado Financeiro)
+TABLE transactions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  couple_id uuid REFERENCES couples NOT NULL,
+  user_id uuid REFERENCES profiles(id), -- Quem pagou
+  amount numeric NOT NULL,
+  category text NOT NULL,
+  description text,
+  type text, -- 'income' | 'expense'
+  date timestamptz DEFAULT now(),
+  status text, -- 'paid' | 'pending'
+  linked_task_id uuid REFERENCES tasks(id) -- Rastreabilidade da ação
+);
+```
 
-### 3.1 Service Worker (Workbox)
-- **Framework:** Vite PWA Plugin.
-- **Caching Strategy:**
-  1.  **Static Assets (JS, CSS, Fonts, Images):** `Stale-While-Revalidate`. Fast load, background update.
-  2.  **API Data (Supabase Reads):** `Network-First`. Try to fetch fresh data; if offline, user cached JSON from previous session.
-  3.  **External APIs (Google Calendar):** `Network-Only`. Do not cache sensitive external user data on client heavily.
+### 2.3 Suporte
+```sql
+TABLE events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  couple_id uuid REFERENCES couples NOT NULL,
+  title text NOT NULL,
+  start_time timestamptz NOT NULL,
+  end_time timestamptz NOT NULL,
+  type text,
+  google_event_id text,
+  assignee_id uuid REFERENCES profiles(id)
+);
 
-### 3.2 Offline Capabilities
-- **Read:** User can view Dashboard, synced transactions, and tasks while offline.
-- **Write:** Optimistic UI updates. Mutations are queued (e.g., using TanStack Query `mutationCache` or `redux-offline` pattern) and replayed when connection is restored.
-
-### 3.3 Manifest (`manifest.json`)
-```json
-{
-  "name": "Gossip Couple - AI Finance",
-  "short_name": "GossipCouple",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#4F46E5",
-  "icons": [
-    { "src": "/pwa-192x192.png", "type": "image/png", "sizes": "192x192" },
-    { "src": "/pwa-512x512.png", "type": "image/png", "sizes": "512x512" }
-  ]
-}
+TABLE investments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  couple_id uuid REFERENCES couples NOT NULL,
+  symbol text,
+  name text,
+  quantity numeric,
+  purchase_price numeric,
+  current_price numeric
+);
 ```
 
 ---
 
-## 4. MCP Integration Strategy
+## 3. Plano de Migração (Refatoração)
 
-To materialize this infrastructure, we will use the following MCP tools:
+### Fase 1: Desacoplamento (`hooks/`)
+Reduzir a complexidade do `App.tsx` movendo lógica para custom hooks.
 
-1.  **`run_query` (Postgres/Supabase):** To execute the DDL statements for creating tables and RLS policies defined in Section 2.
-2.  **`read_file` / `write_file` (Filesystem):** To read the local schema files and write the migration logs.
-3.  **`manage_rls` (Custom/Generic):** To explicitly apply and verify Row Level Security policies to ensure tenant isolation.
+1.  **`useAuth`**: Gerencia sessão, profile e redirecionamento de rotas (Guards).
+2.  **`useSyncData`**: Substitui o `useEffect` gigante. Inscreve-se em canais Realtime do Supabase para manter `transactions`, `tasks`, etc., sempre sincronizados.
+3.  **`useCouple`**: Expõe dados compartilhados (`coupleName`, `riskTolerance`).
+
+### Fase 2: Segurança de Integração (`edge-functions/`)
+1.  **Criar `supabase/functions/chat-transport`**: Recebe o prompt do usuário, injeta o contexto financeiro (RAG) no servidor (seguro) e chama a API do Gemini. Retorna apenas a resposta/JSON.
+    *   *Benefício:* A `VITE_GEMINI_API_KEY` sai do frontend.
+2.  **Refatorar `services/geminiService.ts`**: Passa a ser apenas um wrapper que faz `POST` para essa Edge Function.
 
 ---
-**Approval Required:** Please review the Schema and Flows before we proceed to implementation.
+
+## 4. Estratégia PWA (Offline-First)
+
+Implementação via `vite-plugin-pwa`.
+
+### 4.1 Configuração Service Worker
+*   **Estratégia:** `NetworkFirst` (prioriza dados frescos, cai para cache se offline) para rotas de API (`/rest/v1/*`).
+*   **Estratégia:** `StaleWhileRevalidate` para assets estáticos (JS, CSS, Imagens).
+*   **Cache:** `workbox-precaching` para a Shell da aplicação (index.html, manifest).
+
+### 4.2 Arquitetura de Sincronização
+Para garantir funcionamento offline sem conflitos complexos nesta fase v4:
+1.  **Leitura:** Cache local do Service Worker permite visualizar o Dashboard offline.
+2.  **Escrita:** Bloquear ações de escrita (criar transação/tarefa) se `navigator.onLine === false`, mostrando alerta amigável "Você está offline. Reconecte para salvar.".
+    *   *Futuro (v5):* Implementar `BackgroundSync` com fila IndexedDB.
+
+---
+
+## 5. Segurança (RLS & Policies)
+
+Mantemos e reforçamos o modelo atual.
+
+1.  **Tenant Isolation (Mandatório):**
+    *   Todas as tabelas de dados (`transactions`, `goals`, etc.) devem ter:
+        `CREATE POLICY "Tenant Isolation" ON table USING (couple_id = auth.couple_id());`
+        *(Nota: `auth.couple_id()` é uma função helper personalizada já existente ou a ser criada para extrair o ID do JWT ou perfil)*.
+
+2.  **Profile Privacy:**
+    *   `profiles`: Usuário vê a si mesmo E ao parceiro.
+    *   Policy: `(id = auth.uid()) OR (couple_id IN (SELECT couple_id FROM profiles WHERE id = auth.uid()))`
+
+3.  **Edge Functions:**
+    *   Validar sempre o JWT do usuário.
+    *   Nunca confiar em dados de ID passados no corpo da requisição (`req.body.user_id`), usar sempre `auth.uid()` do contexto.

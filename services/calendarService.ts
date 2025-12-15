@@ -47,51 +47,24 @@ export const CalendarService = {
    * Creates an event in the real Google Calendar API
    */
   syncEvent: async (event: Omit<CalendarEvent, 'id'>): Promise<{ success: boolean; link: string; googleId?: string }> => {
-    const token = await CalendarService.getGoogleToken();
-
-    // If no token, user hasn't granted adding to calendar scope or session is expired.
-    // For now, we fall back to just generating the link without API insert.
-    if (!token) {
-      console.warn("No Google Token found. Falling back to manual link generation.");
-      return {
-        success: false,
-        link: CalendarService.generateGoogleLink(event, "My Couple")
-      };
-    }
-
     try {
-      const response = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          summary: event.title,
-          description: `${event.description || ''}\n\n(Added via Gossip Couple)`,
-          start: { dateTime: event.start }, // Must be ISO string
-          end: { dateTime: event.end },     // Must be ISO string
-        })
+      const { data, error } = await supabase.functions.invoke('calendar-proxy', {
+        body: { event }
       });
 
-      if (!response.ok) {
-        if (response.status === 401) {
-          console.error("Google Token Expired or Invalid");
-          // Ideally prompt for re-auth here
-        }
-        throw new Error(`Google Calendar API Error: ${response.statusText}`);
-      }
+      if (error) throw error;
+      if (data.error) throw new Error(data.error);
 
-      const data = await response.json();
       return {
         success: true,
-        link: data.htmlLink,
-        googleId: data.id
+        link: data.link,
+        googleId: data.googleId // Edge function doesn't strictly return this yet but could be added
       };
 
     } catch (error) {
       console.error("Failed to sync with Google Calendar:", error);
-      // Fallback to manual link on error
+      console.warn("Falling back to manual link generation.");
+      // Fallback to manual link on error (e.g., no connection or API error)
       return {
         success: false,
         link: CalendarService.generateGoogleLink(event, "My Couple")

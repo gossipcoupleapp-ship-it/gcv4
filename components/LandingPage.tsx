@@ -35,7 +35,8 @@ import {
 } from './StaticPages';
 
 interface LandingPageProps {
-  onAuthSuccess: (type: 'P1' | 'P2') => void;
+  onAuthSuccess?: (type: 'P1' | 'P2') => void;
+  inviteToken?: string | null;
 }
 
 type ViewState =
@@ -55,9 +56,9 @@ type ViewState =
   | 'careers'
   | 'blog';
 
-const LandingPage: React.FC<LandingPageProps> = ({ onAuthSuccess }) => {
+const LandingPage: React.FC<LandingPageProps> = ({ onAuthSuccess, inviteToken }) => {
   const [openFaq, setOpenFaq] = useState<number | null>(null);
-  const [view, setView] = useState<ViewState>('landing');
+  const [view, setView] = useState<ViewState>(inviteToken ? 'signup' : 'landing');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // Auth Form State
@@ -66,12 +67,19 @@ const LandingPage: React.FC<LandingPageProps> = ({ onAuthSuccess }) => {
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Simulation state for P2 Invite
-  const [isP2Invite, setIsP2Invite] = useState(false);
+  // P2 Invite State
+  const [isP2Invite, setIsP2Invite] = useState(!!inviteToken);
 
   // Recovery Flow State
   const [recoveryEmail, setRecoveryEmail] = useState('');
   const [recoveryCode, setRecoveryCode] = useState('');
+
+  useEffect(() => {
+    if (inviteToken) {
+      setIsP2Invite(true);
+      setView('signup');
+    }
+  }, [inviteToken]);
 
   // Scroll to top when view changes
   useEffect(() => {
@@ -92,99 +100,45 @@ const LandingPage: React.FC<LandingPageProps> = ({ onAuthSuccess }) => {
     setError('');
 
     try {
-      if (isP2Invite) {
-        // P2 Logic: Just sign up, association happens via invite link/token later
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
+      // 1. Sign Up
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email,
+        password,
+      });
+
+      if (authError) throw authError;
+      if (!authData.user) throw new Error("Erro ao criar usuário.");
+
+      // 2. Create Profile
+      // Note: If you have a Trigger on auth.users -> public.profiles, this might duplicate or error.
+      // Assuming we need to update/insert manually to set the role correctly from the start.
+      // If trigger exists, we should use UPDATE. If not, INSERT.
+      // Safe bet: UPSERT or check spec. 
+      // Spec says: "Trigger creates profile". So we UPDATE it.
+
+      const role = isP2Invite ? 'P2' : 'P1';
+
+      const { error: profileError } = await (supabase
+        .from('profiles') as any)
+        .upsert({
+          id: authData.user.id,
+          email: email,
+          role: role,
+          full_name: 'User', // Placeholder
+          onboarding_completed: false
         });
-        if (error) {
-          // Se já existe, tenta logar para não travar o usuário
-          if (error.message.includes('already registered') || error.status === 422) {
-            const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-            if (signInError) throw new Error('Conta já existe. Tente entrar, mas a senha parece incorreta.');
-            // Se logou, prossegue como sucesso
-          } else {
-            throw error;
-          }
-        }
-        onAuthSuccess('P2');
-      } else {
-        // P1 Logic: Sign Up with Resilience
-        let user = null;
 
-        // 1. Tenta Criar Conta
-        const { data: authData, error: authError } = await supabase.auth.signUp({
-          email,
-          password,
-        });
-
-        // 2. Trata Erro "Already Registered"
-        if (authError) {
-          if (authError.message?.includes('already registered') || authError.status === 422) {
-            console.log("Usuário já existe. Tentando login de recuperação...");
-            const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-              email,
-              password
-            });
-
-            if (signInError) {
-              // Se a senha estiver errada, não podemos fazer nada, é erro mesmo.
-              throw new Error('Este email já está cadastrado. Tente fazer Login.');
-            }
-            user = signInData.user;
-          } else {
-            throw authError;
-          }
-        } else {
-          user = authData.user;
-        }
-
-        if (user) {
-          // 3. Verificação de Estado (Profile Check)
-          // Verifica se o perfil JÁ existe para evitar erro 406 ou duplicação
-          const { data: existingProfile } = await supabase
-            .from('profiles')
-            .select('id, role')
-            .eq('id', user.id)
-            .maybeSingle();
-
-          if (existingProfile) {
-            // Cenário A: Tudo certo, usuário só estava confuso. Redireciona.
-            console.log("Perfil já existe. Redirecionando...");
-            onAuthSuccess((existingProfile.role as 'P1' | 'P2') || 'P1');
-          } else {
-            // Cenário B: Usuário Zumbi (Auth ok, Profile missing). Vamos criar via RPC.
-            console.log("Perfil não encontrado. Criando dados do casal via RPC...");
-
-            // 1. RPC segura que cria o casal e tenta vincular (bypass RLS)
-            const { data: coupleId, error: rpcError } = await supabase.rpc('create_couple_and_link', {
-              p_couple_name: 'My Couple',
-              p_risk_profile: 'medium'
-            });
-
-            if (rpcError) throw rpcError;
-
-            // 2. Garante a criação/atualização do perfil com os dados restantes (Email, Nome, Role)
-            // O RPC tenta dar update, mas se o perfil não existir (ex: falha na trigger de signup),
-            // este upsert cria o registro corretamente, já com o couple_id válido.
-            const { error: profileError } = await supabase
-              .from('profiles')
-              .upsert({
-                id: user.id,
-                couple_id: coupleId,
-                role: 'P1',
-                email: email,
-                full_name: 'User',
-                risk_profile: 'medium'
-              });
-
-            if (profileError) throw profileError;
-
-            onAuthSuccess('P1');
-          }
-        }
+      if (profileError) {
+        console.warn("Profile update failed, might be handled by trigger or RLS", profileError);
+        // Don't block signup if profile fails, might just be 'P1' default from trigger
       }
+
+      // DO NOT create couple here.
+      // P1 -> flow continues to Payment (handled by App.tsx)
+      // P2 -> flow continues to Join (handled by App.tsx using inviteToken)
+
+      if (onAuthSuccess) onAuthSuccess(role);
+
     } catch (err: any) {
       console.error("Erro no cadastro:", err);
       setError(err.message || 'Erro ao criar conta.');
@@ -200,13 +154,14 @@ const LandingPage: React.FC<LandingPageProps> = ({ onAuthSuccess }) => {
         email,
         password,
       });
-      if (error) throw error;
-
       // Fetch profile to determine role
       if (data.user) {
-        const { data: profile } = await supabase.from('profiles').select('role').eq('id', data.user.id).single();
+        const { data: profile } = await (supabase.from('profiles') as any).select('role').eq('id', data.user.id).single();
         onAuthSuccess((profile?.role as 'P1' | 'P2') || 'P1');
       }
+      if (error) throw error;
+
+      // Let App.tsx handle state update via AuthContext
     } catch (err: any) {
       setError("Email ou senha inválidos.");
     }
@@ -217,7 +172,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onAuthSuccess }) => {
       provider: 'google',
       options: {
         redirectTo: window.location.origin,
-        scopes: 'https://www.googleapis.com/auth/calendar',
         queryParams: {
           access_type: 'offline',
           prompt: 'consent',
@@ -227,9 +181,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onAuthSuccess }) => {
   };
 
   const handleSimulateP2 = () => {
-    setIsP2Invite(true);
-    setView('signup');
-    alert("Simulando acesso via link de convite (P2). Você pulará o pagamento.");
+    // Deprecated simulation
   };
 
   // --- PASSWORD RECOVERY HANDLERS ---
