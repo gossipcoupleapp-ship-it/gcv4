@@ -23,9 +23,10 @@ interface OnboardingProps {
   userRole: UserRole;
   inviteToken?: string;
   onFinish: (data: OnboardingData) => void;
+  calendarConnected?: boolean;
 }
 
-const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish }) => {
+const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish, calendarConnected = false }) => {
   const [step, setStep] = useState(1);
   const [data, setData] = useState<OnboardingData>({
     userName: '',
@@ -39,18 +40,38 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
   const [inviteLink, setInviteLink] = useState('');
   const [loadingInvite, setLoadingInvite] = useState(false);
 
+  // Persistence: Load State
+  React.useEffect(() => {
+    const saved = localStorage.getItem('gossip_onboarding_backup');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed.data) setData(d => ({ ...d, ...parsed.data }));
+        if (parsed.step) setStep(parsed.step);
+      } catch (e) {
+        console.error("Failed to restore onboarding state", e);
+      }
+    }
+  }, []);
+
+  // Persistence: Save State
+  React.useEffect(() => {
+    localStorage.setItem('gossip_onboarding_backup', JSON.stringify({ data, step }));
+  }, [data, step]);
+
   // Fetch Invite Link for P1 when reaching step 7
   React.useEffect(() => {
     if (userRole === 'P1' && step === 7 && !inviteLink) {
       const fetchInvite = async () => {
         setLoadingInvite(true);
         try {
+          // Use invite-manager to create invite
           const { data, error } = await supabase.functions.invoke('invite-manager', {
             body: { action: 'create_invite' }
           });
           if (error) throw error;
-          // Construct full URL. data.invite_token is the token.
-          // Assuming the link format:
+
+          // Use 'token' param as expected by App.tsx
           const link = `${window.location.origin}/?token=${data.invite_token}`;
           setInviteLink(link);
         } catch (err) {
@@ -310,32 +331,46 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
         <p className="text-gray-500 mt-2">Conecte seu Google Calendar para que a IA possa organizar seus compromissos.</p>
       </div>
 
+      {data.calendarConnected ? (
+        <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center animate-fade-in">
+          <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3 text-green-600">
+            <CheckCircle size={24} />
+          </div>
+          <h3 className="font-bold text-green-800">Google Calendar Conectado!</h3>
+          <p className="text-sm text-green-700 mt-1">Sua agenda será sincronizada automaticamente.</p>
+        </div>
+      ) : (
+        <button
+          onClick={() => {
+            // Save state explicitly before redirect (though effect handles it too)
+            localStorage.setItem('gossip_onboarding_backup', JSON.stringify({ data, step }));
+
+            const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || '74342658672-an85oqs0lb7us7lr1km1pgor3kdfnd8r.apps.googleusercontent.com';
+            const redirectUri = window.location.origin;
+            const scope = 'https://www.googleapis.com/auth/calendar';
+            // access_type=offline and prompt=consent are CRITICAL for receiving a refresh_token
+            const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&access_type=offline&prompt=consent`;
+            window.location.href = url;
+          }}
+          className="w-full py-4 bg-white border-2 border-gray-200 text-gray-700 font-bold rounded-xl hover:bg-gray-50 transition-all flex items-center justify-center gap-2"
+        >
+          <img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5" />
+          Conectar Google Calendar
+        </button>
+      )}
+
+      {/* Manual Continue Button (Disabled if not connected? Optional, maybe strictly require it or allow skip) */}
+      {/* For now allowing continue regardless but encouraging connection */}
       <button
         onClick={() => {
-          const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || 'YOUR_GOOGLE_CLIENT_ID';
-          const redirectUri = window.location.origin;
-          const scope = 'https://www.googleapis.com/auth/calendar';
-          // access_type=offline and prompt=consent are CRITICAL for receiving a refresh_token
-          const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&access_type=offline&prompt=consent`;
-          window.location.href = url;
+          if (data.calendarConnected) {
+            setData({ ...data, calendarConnected: true });
+          }
+          handleNext();
         }}
-        className={`p-6 rounded-2xl border-2 cursor-pointer transition-all flex items-center gap-4 w-full text-left ${data.calendarConnected ? 'border-green-500 bg-green-50' : 'border-gray-200 bg-white hover:border-gray-300'}`}
+        className="w-full py-4 bg-gray-900 text-white font-bold rounded-xl shadow-lg hover:bg-black transition-all"
       >
-        <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm">
-          <img src="https://upload.wikimedia.org/wikipedia/commons/5/53/Google_%22G%22_Logo.svg" alt="G" className="w-6 h-6" />
-        </div>
-        <div className="flex-1">
-          <h4 className="font-bold text-gray-800">Google Calendar</h4>
-          <p className="text-xs text-gray-500">{data.calendarConnected ? 'Conectado com sucesso' : 'Toque para conectar sua conta'}</p>
-        </div>
-        {data.calendarConnected && <CheckCircle className="text-green-600" size={24} />}
-      </button>
-
-      <button
-        onClick={handleNext}
-        className="w-full py-4 bg-gray-900 text-white font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
-      >
-        {data.calendarConnected ? 'Continuar' : 'Pular por enquanto'} <ArrowRight size={20} />
+        {data.calendarConnected ? 'Continuar' : 'Pular por enquanto'}
       </button>
     </div>
   );

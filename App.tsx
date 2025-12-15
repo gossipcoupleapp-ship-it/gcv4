@@ -15,15 +15,14 @@ import Onboarding from './components/Onboarding';
 import PaymentSuccess from './components/PaymentSuccess';
 import { GeminiService } from './services/geminiService';
 import { CalendarService } from './services/calendarService';
-import { useSyncData } from './src/hooks/useSyncData'; // NOTE: Path might need cleanup if we move hooks
+import { useSyncData } from './src/hooks/useSyncData';
 import { supabase } from './src/lib/supabase';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 
 const gemini = new GeminiService();
 
-// --- Main App Logic (Wrapped in AuthProvider) ---
-
 const MainApp: React.FC = () => {
+  // 1. All Hooks (Must be top level)
   const {
     user,
     profile,
@@ -39,7 +38,9 @@ const MainApp: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>(Tab.DASHBOARD);
   const [inviteToken, setInviteToken] = useState<string | null>(null);
 
-  // App Data State (Synced)
+  // App Data State
+  const [subscribing, setSubscribing] = useState(false);
+  const [calendarConnected, setCalendarConnected] = useState(false); // New State
   const [state, setState] = useState<AppState>({
     transactions: [],
     goals: [],
@@ -54,62 +55,6 @@ const MainApp: React.FC = () => {
     }
   });
 
-  // Check for Invite Token in URL
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get('token');
-    const sessionId = params.get('session_id'); // Stripe Return
-    const code = params.get('code'); // Google OAuth Return
-
-    if (token) setInviteToken(token);
-
-    if (code) {
-      // Exchange Code for Token via Edge Function
-      const handleGoogleAuth = async () => {
-        try {
-          const { error } = await supabase.functions.invoke('google-auth', {
-            body: { code, redirect_uri: window.location.origin }
-          });
-          if (error) throw error;
-
-          // Clear URL params to avoid re-triggering
-          window.history.replaceState({}, '', window.location.pathname);
-          alert('Google Calendar conectado com sucesso!');
-          // Ideally update local state or user profile to reflect connection
-        } catch (err) {
-          console.error("Google Auth Error:", err);
-          alert('Erro ao conectar Google Calendar.');
-        }
-      };
-      handleGoogleAuth();
-    }
-    // Stripe session_id handling is mostly for UX feedback, the webhook handles the data.
-  }, []);
-
-  // Sync Data Hook
-  const { data: syncData, loading: syncLoading } = useSyncData(couple?.id || null);
-
-  useEffect(() => {
-    if (syncData && Object.keys(syncData).length > 0) {
-      setState(prev => ({ ...prev, ...syncData }));
-    }
-  }, [syncData]);
-
-  // Update State with Profile/Couple Info
-  useEffect(() => {
-    if (profile && couple) {
-      setState(prev => ({
-        ...prev,
-        userProfile: {
-          ...prev.userProfile,
-          coupleName: couple.name || 'Seu Casal',
-          riskTolerance: (profile.risk_profile as any) || 'medium',
-          inviteLink: `${window.location.origin}?token=...` // Generated dynamically usually
-        }
-      }));
-    }
-  }, [profile, couple]);
-
   // Chat State
   const [isChatModalOpen, setIsChatModalOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -117,6 +62,75 @@ const MainApp: React.FC = () => {
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
 
+  // Payment Auto-Trigger Ref
+  const hasPaymentTriggeredRef = useRef(false);
+
+  // Sync Data Hook
+  const { data: syncData, loading: syncLoading } = useSyncData(couple?.id || null);
+
+  // 2. All Effects
+
+  // Effect: Sync Data Update
+  useEffect(() => {
+    if (syncData && Object.keys(syncData).length > 0) {
+      setState(prev => ({ ...prev, ...syncData }));
+    }
+  }, [syncData]);
+
+  // Effect: Profile/Couple/Integrations Update
+  useEffect(() => {
+    if (user) {
+      // Check Google Calendar Connection
+      const checkIntegration = async () => {
+        const { data } = await supabase.from('user_integrations').select('id').eq('user_id', user.id).single();
+        if (data) setCalendarConnected(true);
+      };
+      checkIntegration();
+    }
+
+    if (profile && couple) {
+      setState(prev => ({
+        ...prev,
+        userProfile: {
+          ...prev.userProfile,
+          coupleName: couple.name || 'Seu Casal',
+          riskTolerance: (profile.risk_profile as any) || 'medium',
+          inviteLink: `${window.location.origin}?token=...`
+        }
+      }));
+    }
+  }, [profile, couple, user]);
+
+  // Effect: URL Params (Invite Token, Stripe, Google Auth)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    const sessionId = params.get('session_id');
+    const code = params.get('code');
+
+    if (token) setInviteToken(token);
+
+    if (code) {
+      const handleGoogleAuth = async () => {
+        try {
+          const { error } = await supabase.functions.invoke('google-auth', {
+            body: { code, redirect_uri: window.location.origin }
+          });
+          if (error) throw error;
+
+          setCalendarConnected(true);
+          window.history.replaceState({}, '', window.location.pathname);
+          // alert('Google Calendar conectado com sucesso!'); // Feedback moved to Onboarding UI
+        } catch (err) {
+          console.error("Google Auth Error:", err);
+          alert('Erro ao conectar Google Calendar.');
+        }
+      };
+      handleGoogleAuth();
+    }
+  }, []);
+
+  // Effect: Click Outside Profile Menu
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
@@ -127,114 +141,48 @@ const MainApp: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // --- State Machine & Routing ---
+  // Effect: Auto-Subscribe for P1
+  useEffect(() => {
+    // Only trigger if: User is loaded, Is P1, Subscription Inactive, Not currently subscribing, Not already triggered
+    if (user && !authLoading && isP1 && !subscriptionActive && !subscribing && !hasPaymentTriggeredRef.current) {
+      // Check if we are already in a success state (session_id present)
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('session_id')) return; // Don't redirect if we just came back!
 
-  if (authLoading) {
-    return (
-      <div className="h-screen w-full flex items-center justify-center bg-gray-50">
-        <Loader2 className="w-10 h-10 text-primary-mid animate-spin" />
-      </div>
-    );
-  }
+      hasPaymentTriggeredRef.current = true;
 
-  // 1. Not Authenticated -> Landing Page
-  if (!user) {
-    // If specific invite token exists, we pass it to LandingPage to handle "Join" flow
-    return <LandingPage inviteToken={inviteToken} />;
-  }
-
-  // 2. Authenticated but no Profile? (Should not happen usually if triggers work, but safe guard)
-  if (!profile) {
-    return (
-      <div className="h-screen w-full flex items-center justify-center">
-        <p>Criando seu perfil...</p>
-        {/* Can trigger a manual fetch or wait for webhook/trigger */}
-      </div>
-    );
-  }
-
-  // 3. P2 Invite Processing (Mid-Auth)
-  // If user has token but is not yet linked to a couple (or is linking to new one)
-  if (inviteToken && !profile.couple_id) {
-    // We need to execute the Join RPC.
-    // This is better handled inside a dedicated component or Onboarding, but let's do a quick effect or intermediary view.
-    // Ideally, pass token to Onboarding or a "Joining..." screen.
-    return <Onboarding userRole="P2" inviteToken={inviteToken} onFinish={() => window.location.href = '/'} />;
-  }
-
-  // 4. P1 Payment Guard
-  if (isP1 && !subscriptionActive) {
-    // Check for success param just to show success UI while webhook processes
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('session_id')) {
-      return <PaymentSuccess />; // Will poll or wait for profile update via AuthContext
+      const doSubscribe = async () => {
+        setSubscribing(true);
+        try {
+          const { data, error } = await supabase.functions.invoke('create-checkout-session');
+          if (error) throw error;
+          if (data?.url) {
+            window.location.href = data.url;
+          } else {
+            throw new Error('No checkout URL returned');
+          }
+        } catch (err) {
+          console.error('Subscription Error:', err);
+          alert('Erro ao iniciar pagamento. Tente recarregar.');
+          setSubscribing(false);
+          hasPaymentTriggeredRef.current = false; // Allow retry
+        }
+      };
+      doSubscribe();
     }
+  }, [user, authLoading, isP1, subscriptionActive, subscribing]);
 
-    // Redirect logic to Stripe would go here.
-    // For now, render a "Payment Needed" screen that buttons to call backend.
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-gray-50 text-center">
-        <h1 className="text-2xl font-bold mb-4">Assinatura Necessária</h1>
-        <p className="mb-6">Para continuar como fundador do casal, é necessária uma assinatura ativa.</p>
-        <button
-          onClick={async () => {
-            // Call create-checkout-session function
-            const { data, error } = await supabase.functions.invoke('create-checkout-session');
-            if (data?.url) window.location.href = data.url;
-            else alert('Erro ao iniciar pagamento');
-          }}
-          className="px-6 py-3 bg-primary-mid text-white rounded-xl font-bold"
-        >
-          Assinar Agora
-        </button>
-        <button onClick={() => supabase.auth.signOut()} className="mt-4 text-gray-400 text-sm">Sair</button>
-      </div>
-    );
-  }
-
-  // 5. Onboarding Guard
-  if (!onboardingCompleted) {
-    // If P1 has paid (or P2 joined), but hasn't finished wizard
-    return <Onboarding userRole={profile.role as UserRole} onFinish={() => window.location.reload()} />;
-  }
-
-  // --- Main App ---
-
+  // 3. Handlers
   const handleLogout = async () => {
     await supabase.auth.signOut();
   };
-
-  const handleChatSend = async (text: string) => {
-    // ... logic adapted to use 'couple' object ...
-    const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', text, timestamp: Date.now() };
-    setChatMessages(prev => [...prev, userMsg]);
-    setIsChatThinking(true);
-    try {
-      if (!couple?.id) throw new Error("Couple ID missing");
-      // call gemini ...
-      const response = await gemini.chatWithAgent(text, couple.id, state, {
-        onTransaction: (t) => { }, // Implement real handlers
-        onGoal: (g) => { },
-        onTask: (t) => { },
-        onEvent: (e) => { }
-      });
-      const aiMsg: ChatMessage = { id: (Date.now() + 1).toString(), role: 'model', text: response.text, timestamp: Date.now(), payload: response.payload };
-      setChatMessages(prev => [...prev, aiMsg]);
-    } catch (e) {
-      setChatMessages(prev => [...prev, { id: 'err', role: 'model', text: "Erro ao processar.", timestamp: Date.now() }]);
-    } finally {
-      setIsChatThinking(false);
-    }
-  };
-
-  // --- CRUD Handlers ---
 
   const handleCreateTransaction = async (t: Omit<Transaction, 'id'>) => {
     if (!couple?.id) return;
     const { error } = await (supabase.from('transactions') as any).insert({
       ...t,
       couple_id: couple.id,
-      date: new Date(t.date).toISOString() // Ensure standard format
+      date: new Date(t.date).toISOString()
     });
     if (error) console.error("Error creating transaction:", error);
   };
@@ -264,7 +212,7 @@ const MainApp: React.FC = () => {
     const { error } = await (supabase.from('tasks') as any).insert({
       title: t.title,
       couple_id: couple.id,
-      assigned_to: t.assignee === 'user1' ? user?.id : null, // Fallback mapping
+      assigned_to: t.assignee === 'user1' ? user?.id : null,
       status: t.completed ? 'completed' : 'pending',
       due_date: new Date(t.deadline).toISOString(),
       priority: t.priority || 'medium'
@@ -284,7 +232,6 @@ const MainApp: React.FC = () => {
   };
 
   const handleUpdateUser = async (u: Partial<UserDetail>) => {
-    // Updates current user profile
     if (!user) return;
     const { error } = await (supabase.from('profiles') as any).update({
       full_name: u.name,
@@ -303,12 +250,81 @@ const MainApp: React.FC = () => {
     if (error) console.error("Error updating couple:", error);
   };
 
-  // Chat Handlers (Bridge to CRUD)
-  const handleChatTransaction = (t: any) => handleCreateTransaction(t);
-  const handleChatGoal = (g: any) => handleCreateGoal(g);
-  const handleChatTask = (t: any) => handleCreateTask(t);
+  const handleChatSend = async (text: string) => {
+    const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', text, timestamp: Date.now() };
+    setChatMessages(prev => [...prev, userMsg]);
+    setIsChatThinking(true);
+    try {
+      if (!couple?.id) throw new Error("Couple ID missing");
+      const response = await gemini.chatWithAgent(text, couple.id, state, {
+        onTransaction: handleCreateTransaction,
+        onGoal: handleCreateGoal,
+        onTask: handleCreateTask,
+        onEvent: (e) => { }
+      });
+      const aiMsg: ChatMessage = { id: (Date.now() + 1).toString(), role: 'model', text: response.text, timestamp: Date.now(), payload: response.payload };
+      setChatMessages(prev => [...prev, aiMsg]);
+    } catch (e) {
+      setChatMessages(prev => [...prev, { id: 'err', role: 'model', text: "Erro ao processar.", timestamp: Date.now() }]);
+    } finally {
+      setIsChatThinking(false);
+    }
+  };
 
+  // 4. Returns (View Logic)
 
+  if (authLoading) {
+    return (
+      <div className="h-screen w-full flex items-center justify-center bg-gray-50">
+        <Loader2 className="w-10 h-10 text-primary-mid animate-spin" />
+      </div>
+    );
+  }
+
+  // Guard: Not Authenticated
+  if (!user) {
+    return <LandingPage inviteToken={inviteToken} />;
+  }
+
+  // Guard: No Profile
+  if (!profile) {
+    return (
+      <div className="h-screen w-full flex items-center justify-center">
+        <p>Criando seu perfil...</p>
+      </div>
+    );
+  }
+
+  // Guard: P2 Invite Joining
+  if (inviteToken && !profile.couple_id) {
+    return <Onboarding userRole="P2" inviteToken={inviteToken} calendarConnected={calendarConnected} onFinish={() => window.location.href = '/'} />;
+  }
+
+  // Guard: P1 Payment
+  if (isP1 && !subscriptionActive) {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('session_id')) {
+      return <PaymentSuccess />;
+    }
+
+    // Auto Subscribe UI
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-gray-50 text-center animate-fade-in">
+        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full">
+          <Loader2 className="animate-spin text-primary-mid mx-auto mb-4" size={40} />
+          <h1 className="text-xl font-bold mb-2">Preparando Checkout Seguro</h1>
+          <p className="text-gray-500 text-sm">Transferindo você para o Stripe...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Guard: Onboarding Incomplete
+  if (!onboardingCompleted) {
+    return <Onboarding userRole={profile.role as UserRole} calendarConnected={calendarConnected} onFinish={() => window.location.reload()} />;
+  }
+
+  // Main Dashboard View
   return (
     <div className="flex h-screen bg-gray-50 text-gray-800 font-sans overflow-hidden animate-fade-in">
       {/* Sidebar */}
@@ -324,8 +340,10 @@ const MainApp: React.FC = () => {
             <SidebarItem icon={<PieChart size={20} />} label="Visão Geral" active={activeTab === Tab.OVERVIEW} onClick={() => setActiveTab(Tab.OVERVIEW)} />
             <SidebarItem icon={<LayoutDashboard size={20} />} label="Dashboard" active={activeTab === Tab.DASHBOARD} onClick={() => setActiveTab(Tab.DASHBOARD)} />
             <SidebarItem icon={<CalIcon size={20} />} label="Calendar" active={activeTab === Tab.CALENDAR} onClick={() => setActiveTab(Tab.CALENDAR)} />
-            {/* ... others */}
-            <SidebarItem icon={<Settings size={20} />} label="Settings" active={activeTab === Tab.SETTINGS} onClick={() => setActiveTab(Tab.SETTINGS)} />
+            <SidebarItem icon={<Target size={20} />} label="Objetivos" active={activeTab === Tab.GOALS} onClick={() => setActiveTab(Tab.GOALS)} />
+            <SidebarItem icon={<TrendingUp size={20} />} label="Investimentos" active={activeTab === Tab.INVESTMENTS} onClick={() => setActiveTab(Tab.INVESTMENTS)} />
+            <SidebarItem icon={<MessageSquare size={20} />} label="Novidades" active={activeTab === Tab.NEWS} onClick={() => setActiveTab(Tab.NEWS)} />
+            <SidebarItem icon={<Settings size={20} />} label="Configurações" active={activeTab === Tab.SETTINGS} onClick={() => setActiveTab(Tab.SETTINGS)} />
           </nav>
         </div>
         <div className="p-4 border-t border-gray-100 relative" ref={profileMenuRef}>
@@ -346,8 +364,23 @@ const MainApp: React.FC = () => {
 
       <main className="flex-1 flex flex-col overflow-hidden relative bg-[#F9FAFB]">
         <header className="h-20 bg-white/80 backdrop-blur-md border-b border-gray-100 flex items-center justify-between px-8 sticky top-0 z-10">
-          <h1 className="text-2xl font-bold text-gray-800">{activeTab}</h1>
-          {/* ... */}
+          <h1 className="text-2xl font-bold text-gray-800">
+            {activeTab === Tab.DASHBOARD ? 'Dashboard' :
+              activeTab === Tab.CALENDAR ? 'Calendário Inteligente' :
+                activeTab === Tab.GOALS ? 'Sonhos do Casal' :
+                  activeTab === Tab.INVESTMENTS ? 'Investimentos' :
+                    activeTab === Tab.NEWS ? 'Gossip News' :
+                      activeTab === Tab.SETTINGS ? 'Configurações' : 'Visão Geral'}
+          </h1>
+          <div className="flex items-center space-x-4">
+            <button onClick={() => setIsChatModalOpen(true)} className="p-2 text-gray-400 hover:text-primary-mid transition-colors">
+              <MessageSquare size={24} />
+            </button>
+            <div className="relative">
+              <Bell size={24} className="text-gray-400" />
+              <span className="absolute top-0 right-0 w-2 h-2 bg-red-500 rounded-full"></span>
+            </div>
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto p-4 lg:p-8 relative scroll-smooth">
@@ -365,6 +398,16 @@ const MainApp: React.FC = () => {
               />
             )}
             {activeTab === Tab.DASHBOARD && <Dashboard state={state} onOpenChat={() => setIsChatModalOpen(true)} />}
+            {activeTab === Tab.CALENDAR && <CalendarView events={state.events} />}
+            {activeTab === Tab.GOALS && (
+              <GoalsView
+                goals={state.goals}
+                onCreateGoal={handleCreateGoal}
+                onUpdateGoal={handleUpdateGoal}
+              />
+            )}
+            {activeTab === Tab.INVESTMENTS && <InvestmentsView investments={state.investments} />}
+            {activeTab === Tab.NEWS && <NewsView />}
             {activeTab === Tab.SETTINGS && (
               <SettingsView
                 state={state}
@@ -375,7 +418,6 @@ const MainApp: React.FC = () => {
                 onLogout={handleLogout}
               />
             )}
-            {/* ... Implement other tabs ... */}
           </div>
         </div>
       </main>
@@ -387,10 +429,7 @@ const MainApp: React.FC = () => {
         messages={chatMessages}
         onSendMessage={handleChatSend}
         isThinking={isChatThinking}
-        onConfirmAction={(action) => {
-          // Dispatch generic actions if ChatInterface supports it later
-          console.log("Action confirmed:", action);
-        }}
+        onConfirmAction={(action) => console.log("Action confirmed:", action)}
       />
 
     </div>
