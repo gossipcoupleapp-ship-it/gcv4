@@ -1,5 +1,4 @@
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   User,
   Users,
@@ -10,7 +9,6 @@ import {
   TrendingUp,
   Link,
   Copy,
-  Play,
   MessageCircle,
   Camera,
   Upload,
@@ -26,57 +24,77 @@ interface OnboardingProps {
   calendarConnected?: boolean;
 }
 
+const STORAGE_KEY = 'gossip_onboarding_state';
+
 const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish, calendarConnected = false }) => {
-  const [step, setStep] = useState(1);
-  const [data, setData] = useState<OnboardingData>({
-    userName: '',
-    coupleName: '',
-    monthlyIncome: '',
-    incomeReceiptDate: '',
-    riskProfile: 'medium',
-    calendarConnected: false,
-    profileImage: undefined
+
+  // 1. Lazy State Initialization (Reads from storage BEFORE first render)
+  const [step, setStep] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed.step || 1;
+      }
+    } catch (e) {
+      console.warn("Failed to load saved step:", e);
+    }
+    return 1;
   });
+
+  const [data, setData] = useState<OnboardingData>(() => {
+    const initialData: OnboardingData = {
+      userName: '',
+      coupleName: '',
+      monthlyIncome: '',
+      incomeReceiptDate: '',
+      riskProfile: 'medium',
+      calendarConnected: false,
+      profileImage: undefined
+    };
+
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed.data ? { ...initialData, ...parsed.data } : initialData;
+      }
+    } catch (e) {
+      console.warn("Failed to load saved data:", e);
+    }
+    return initialData;
+  });
+
   const [inviteLink, setInviteLink] = useState('');
   const [loadingInvite, setLoadingInvite] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
 
-  // Persistence: Load State
-  React.useEffect(() => {
-    const saved = localStorage.getItem('gossip_onboarding_backup');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (parsed.data) setData(d => ({ ...d, ...parsed.data }));
-        if (parsed.step) setStep(parsed.step);
-      } catch (e) {
-        console.error("Failed to restore onboarding state", e);
-      }
+  // 2. React to Prop Updates (Calendar Connection from App.tsx)
+  useEffect(() => {
+    if (calendarConnected && !data.calendarConnected) {
+      setData(prev => ({ ...prev, calendarConnected: true }));
     }
-  }, []);
+  }, [calendarConnected]);
 
-  // Persistence: Save State
-  React.useEffect(() => {
+  // 3. Persist State on Change
+  useEffect(() => {
     try {
-      localStorage.setItem('gossip_onboarding_backup', JSON.stringify({ data, step }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ data, step }));
     } catch (e) {
-      console.warn("Storage quota exceeded, skipping backup", e);
+      console.warn("Storage quota exceeded or error:", e);
     }
   }, [data, step]);
 
-  // Fetch Invite Link for P1 when reaching step 7
-  React.useEffect(() => {
+  // 4. Invite Token Logic (P1)
+  useEffect(() => {
     if (userRole === 'P1' && step === 7 && !inviteLink) {
       const fetchInvite = async () => {
         setLoadingInvite(true);
         try {
-          // Use invite-manager to create invite
           const { data, error } = await supabase.functions.invoke('invite-manager', {
             body: { action: 'create_invite' }
           });
           if (error) throw error;
-
-          // Use 'token' param as expected by App.tsx
           const link = `${window.location.origin}/?token=${data.invite_token}`;
           setInviteLink(link);
         } catch (err) {
@@ -90,33 +108,40 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
     }
   }, [userRole, step, inviteLink]);
 
-  const handleNext = () => {
-    setStep(step + 1);
-  };
+
+  // 5. Handlers
+  const handleNext = () => setStep(prev => prev + 1);
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       setUploadingImage(true);
       try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error("User not found for upload");
+
         const fileExt = file.name.split('.').pop();
-        const fileName = `${Date.now()}.${fileExt}`;
+        const fileName = `${user.id}-${Date.now()}.${fileExt}`;
         const filePath = `${fileName}`;
 
+        // Direct Upload to Supabase Storage
         const { error: uploadError } = await supabase.storage
           .from('avatars')
-          .upload(filePath, file);
+          .upload(filePath, file, { upsert: true });
 
         if (uploadError) throw uploadError;
 
+        // Get Public URL
         const { data: { publicUrl } } = supabase.storage
           .from('avatars')
           .getPublicUrl(filePath);
 
-        setData({ ...data, profileImage: publicUrl });
+        // Store URL Only
+        setData(prev => ({ ...prev, profileImage: publicUrl }));
+
       } catch (error) {
         console.error('Error uploading avatar:', error);
-        alert('Erro ao fazer upload da imagem.');
+        alert('Erro ao fazer upload da imagem. Tente novamente.');
       } finally {
         setUploadingImage(false);
       }
@@ -125,28 +150,31 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
 
   const handleFinish = async () => {
     try {
+      // Clear Storage FIRST to prevent zombie state on next reload
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch (e) { console.error("Error clearing storage:", e); }
+
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("No authenticated user");
 
-      // 1. Image is already uploaded (if setup correctly), so just use current URL
-      const avatarUrl = data.profileImage;
-
-      // 2. Update Profile
+      // Update Profile in DB
       const { error: profileError } = await (supabase
         .from('profiles') as any)
         .update({
           full_name: data.userName,
           income: parseFloat(data.monthlyIncome || '0'),
           income_date: parseInt(data.incomeReceiptDate || '1'),
-          avatar_url: avatarUrl,
+          avatar_url: data.profileImage, // Now just a URL string
           onboarding_completed: true
         })
         .eq('id', user.id);
 
       if (profileError) throw profileError;
 
-      // 3. Update Couple (P1 only)
+      // Update Couple (P1 Only)
       if (userRole === 'P1' && data.coupleName) {
+        // Need to find couple_id first
         const { data: profile } = await (supabase.from('profiles') as any).select('couple_id').eq('id', user.id).maybeSingle();
         if (profile?.couple_id) {
           await (supabase
@@ -159,7 +187,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
         }
       }
 
-      // 4. Join Couple (P2 only)
+      // Join Couple (P2 Only)
       if (userRole === 'P2' && inviteToken) {
         const { error: joinError } = await supabase.functions.invoke('invite-manager', {
           body: {
@@ -167,37 +195,36 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
             invite_token: inviteToken
           }
         });
-
         if (joinError) throw joinError;
       }
 
-      // 5. Finish
-      onFinish(data); // This triggers parent to re-fetch/redirect
+      // Notify Parent
+      onFinish(data);
 
     } catch (err) {
       console.error("Onboarding Save Error:", err);
-      alert("Erro ao salvar dados. Tente novamente.");
+      // Restore state in case of error so user doesn't lose data?
+      // For now, simple alert.
+      alert("Erro ao salvar dados. Seus dados locais estão salvos, tente finalizar novamente.");
     }
   };
 
+  // --- Renderers ---
+
   const renderStepIndicator = () => {
-    const totalSteps = userRole === 'P1' ? 8 : 5; // Added 1 step for Photo
+    const totalSteps = userRole === 'P1' ? 8 : 5;
     return (
       <div className="flex gap-2 mb-8 justify-center">
         {[...Array(totalSteps)].map((_, i) => (
           <div
             key={i}
-            className={`h-1.5 rounded-full transition-all duration-300 ${i + 1 <= step ? 'w-8 bg-primary-mid' : 'w-2 bg-gray-200'
-              }`}
+            className={`h-1.5 rounded-full transition-all duration-300 ${i + 1 <= step ? 'w-8 bg-primary-mid' : 'w-2 bg-gray-200'}`}
           />
         ))}
       </div>
     );
   };
 
-  // --- STEP CONTENT RENDERERS ---
-
-  // 1. Basic Info (Both)
   const renderNameStep = () => (
     <div className="space-y-6 animate-fade-in">
       <div className="text-center">
@@ -213,7 +240,6 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
             : 'Primeiro, como você gostaria de ser chamado?'}
         </p>
       </div>
-
       <div>
         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Seu Nome</label>
         <input
@@ -225,7 +251,6 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
           autoFocus
         />
       </div>
-
       <button
         onClick={handleNext}
         disabled={!data.userName}
@@ -236,7 +261,6 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
     </div>
   );
 
-  // 2. Profile Photo Step (Both - NEW)
   const renderPhotoStep = () => (
     <div className="space-y-6 animate-fade-in">
       <div className="text-center">
@@ -244,16 +268,18 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
           <Camera size={32} />
         </div>
         <h2 className="text-2xl font-bold text-gray-900">Sua Foto de Perfil</h2>
-        <p className="text-gray-500 mt-2">Adicione uma foto para personalizar sua experiência. (Opcional)</p>
+        <p className="text-gray-500 mt-2">Adicione uma foto para personalizar sua experiência.</p>
       </div>
 
       <div className="flex flex-col items-center justify-center py-4">
         <div className="relative group">
-          <div className="w-32 h-32 rounded-full bg-gray-100 border-4 border-white shadow-xl flex items-center justify-center overflow-hidden">
+          <div className="w-32 h-32 rounded-full bg-gray-100 border-4 border-white shadow-xl flex items-center justify-center overflow-hidden relative">
             {data.profileImage ? (
               <img src={data.profileImage} alt="Profile" className="w-full h-full object-cover" />
             ) : uploadingImage ? (
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-mid"></div>
+              <div className="absolute inset-0 flex items-center justify-center bg-gray-100">
+                <div className="w-8 h-8 border-2 border-primary-mid border-t-transparent rounded-full animate-spin"></div>
+              </div>
             ) : (
               <User size={48} className="text-gray-300" />
             )}
@@ -266,23 +292,16 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
       </div>
 
       <div className="flex gap-3">
-        <button
-          onClick={handleNext}
-          className="flex-1 py-4 bg-white border border-gray-200 text-gray-500 font-bold rounded-xl hover:bg-gray-50 transition-colors"
-        >
+        <button onClick={handleNext} className="flex-1 py-4 bg-white border border-gray-200 text-gray-500 font-bold rounded-xl hover:bg-gray-50 transition-colors">
           Pular
         </button>
-        <button
-          onClick={handleNext}
-          className="flex-1 py-4 bg-gray-900 text-white font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
-        >
+        <button onClick={handleNext} className="flex-1 py-4 bg-gray-900 text-white font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2">
           {data.profileImage ? 'Ficou ótimo!' : 'Continuar'} <ArrowRight size={20} />
         </button>
       </div>
     </div>
   );
 
-  // 3. Couple Info (P1 Only)
   const renderCoupleStep = () => (
     <div className="space-y-6 animate-fade-in">
       <div className="text-center">
@@ -292,7 +311,6 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
         <h2 className="text-2xl font-bold text-gray-900">Nome do Casal</h2>
         <p className="text-gray-500 mt-2">Como vocês querem chamar o time financeiro de vocês?</p>
       </div>
-
       <div>
         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome do Casal</label>
         <input
@@ -303,18 +321,12 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
           placeholder="Ex: Casal Power, Família Silva"
         />
       </div>
-
-      <button
-        onClick={handleNext}
-        disabled={!data.coupleName}
-        className="w-full py-4 bg-gray-900 text-white font-bold rounded-xl shadow-lg disabled:opacity-50 transition-all flex items-center justify-center gap-2"
-      >
+      <button onClick={handleNext} disabled={!data.coupleName} className="w-full py-4 bg-gray-900 text-white font-bold rounded-xl shadow-lg disabled:opacity-50 transition-all flex items-center justify-center gap-2">
         Continuar <ArrowRight size={20} />
       </button>
     </div>
   );
 
-  // 4. Calendar Connection (Both)
   const renderCalendarStep = () => (
     <div className="space-y-6 animate-fade-in">
       <div className="text-center">
@@ -336,13 +348,12 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
       ) : (
         <button
           onClick={() => {
-            // Save state explicitly before redirect (though effect handles it too)
-            localStorage.setItem('gossip_onboarding_backup', JSON.stringify({ data, step }));
+            // Explicit Save (Redundant due to effect, but safe)
+            try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ data, step })); } catch (e) { }
 
             const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || '74342658672-an85oqs0lb7us7lr1km1pgor3kdfnd8r.apps.googleusercontent.com';
             const redirectUri = window.location.origin;
             const scope = 'https://www.googleapis.com/auth/calendar';
-            // access_type=offline and prompt=consent are CRITICAL for receiving a refresh_token
             const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&access_type=offline&prompt=consent`;
             window.location.href = url;
           }}
@@ -353,13 +364,10 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
         </button>
       )}
 
-      {/* Manual Continue Button (Disabled if not connected? Optional, maybe strictly require it or allow skip) */}
-      {/* For now allowing continue regardless but encouraging connection */}
       <button
         onClick={() => {
-          if (data.calendarConnected) {
-            setData({ ...data, calendarConnected: true });
-          }
+          // Optimistic update if they clicked to continue (maybe they connected in another tab or just skip)
+          if (calendarConnected) setData(prev => ({ ...prev, calendarConnected: true }));
           handleNext();
         }}
         className="w-full py-4 bg-gray-900 text-white font-bold rounded-xl shadow-lg hover:bg-black transition-all"
@@ -369,7 +377,6 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
     </div>
   );
 
-  // 5. Risk Profile (P1 Only)
   const renderRiskStep = () => (
     <div className="space-y-6 animate-fade-in">
       <div className="text-center">
@@ -401,17 +408,12 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
           </div>
         ))}
       </div>
-
-      <button
-        onClick={handleNext}
-        className="w-full py-4 bg-gray-900 text-white font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
-      >
+      <button onClick={handleNext} className="w-full py-4 bg-gray-900 text-white font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2">
         Continuar <ArrowRight size={20} />
       </button>
     </div>
   );
 
-  // 6. Income (Both)
   const renderIncomeStep = () => (
     <div className="space-y-6 animate-fade-in">
       <div className="text-center">
@@ -457,17 +459,12 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
         </div>
       </div>
 
-      <button
-        onClick={handleNext}
-        disabled={!data.monthlyIncome || !data.incomeReceiptDate}
-        className="w-full py-4 bg-gray-900 text-white font-bold rounded-xl shadow-lg disabled:opacity-50 transition-all flex items-center justify-center gap-2"
-      >
+      <button onClick={handleNext} disabled={!data.monthlyIncome || !data.incomeReceiptDate} className="w-full py-4 bg-gray-900 text-white font-bold rounded-xl shadow-lg disabled:opacity-50 transition-all flex items-center justify-center gap-2">
         Continuar <ArrowRight size={20} />
       </button>
     </div>
   );
 
-  // 7. Invite (P1 Only)
   const renderInviteStep = () => (
     <div className="space-y-6 animate-fade-in">
       <div className="text-center">
@@ -479,49 +476,28 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
       </div>
 
       <div className="bg-gray-100 p-4 rounded-xl break-all text-xs text-gray-500 font-mono text-center flex items-center justify-center min-h-[3rem]">
-        {loadingInvite ? (
-          <span className="animate-pulse">Gerando link exclusivo...</span>
-        ) : (
-          inviteLink
-        )}
+        {loadingInvite ? <span className="animate-pulse">Gerando link exclusivo...</span> : inviteLink}
       </div>
 
       <div className="grid grid-cols-2 gap-4">
-        <button
-          onClick={() => {
-            navigator.clipboard.writeText(inviteLink);
-            alert("Link copiado!");
-          }}
-          className="py-3 bg-white border border-gray-200 rounded-xl font-bold text-gray-700 hover:bg-gray-50 flex items-center justify-center gap-2"
-        >
+        <button onClick={() => { navigator.clipboard.writeText(inviteLink); alert("Link copiado!"); }} className="py-3 bg-white border border-gray-200 rounded-xl font-bold text-gray-700 hover:bg-gray-50 flex items-center justify-center gap-2">
           <Copy size={18} /> Copiar
         </button>
-        <button
-          onClick={() => {
-            const msg = `Oi! Acabei de criar nossa conta no Gossip Couple para o casal '${data.coupleName}'. Entra aí pra gente organizar tudo: ${inviteLink}`;
-            window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
-          }}
-          className="py-3 bg-green-500 text-white rounded-xl font-bold hover:bg-green-600 flex items-center justify-center gap-2"
-        >
+        <button onClick={() => { const msg = `Oi! Acabei de criar nossa conta no Gossip Couple para o casal '${data.coupleName}'. Entra aí pra gente organizar tudo: ${inviteLink}`; window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank'); }} className="py-3 bg-green-500 text-white rounded-xl font-bold hover:bg-green-600 flex items-center justify-center gap-2">
           <MessageCircle size={18} /> WhatsApp
         </button>
       </div>
 
-      <button
-        onClick={handleNext}
-        className="w-full py-4 bg-gray-900 text-white font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 mt-4"
-      >
+      <button onClick={handleNext} className="w-full py-4 bg-gray-900 text-white font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 mt-4">
         Já enviei, continuar <ArrowRight size={20} />
       </button>
     </div>
   );
 
-  // 8. Tutorial (Both)
   const renderVideoStep = () => (
     <div className="space-y-6 animate-fade-in text-center">
       <h2 className="text-2xl font-bold text-gray-900">Como usar a plataforma</h2>
       <p className="text-gray-500 -mt-2 mb-4">Um guia rápido de 1 minuto.</p>
-
       <div className="w-full aspect-video rounded-2xl overflow-hidden shadow-xl bg-black">
         <iframe
           width="100%"
@@ -534,17 +510,13 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
           className="w-full h-full"
         ></iframe>
       </div>
-
-      <button
-        onClick={handleFinish}
-        className="w-full py-4 bg-gradient-to-r from-primary-start to-primary-mid text-white font-bold rounded-xl shadow-lg hover:shadow-primary-start/30 hover:scale-[1.02] transition-all flex items-center justify-center gap-2"
-      >
+      <button onClick={handleFinish} className="w-full py-4 bg-gradient-to-r from-primary-start to-primary-mid text-white font-bold rounded-xl shadow-lg hover:shadow-primary-start/30 hover:scale-[1.02] transition-all flex items-center justify-center gap-2">
         Ir para o Dashboard <ArrowRight size={20} />
       </button>
     </div>
   );
 
-  // Main Logic to choose step based on User Role
+  // --- Step Router ---
   let content;
   if (userRole === 'P1') {
     switch (step) {
@@ -556,7 +528,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
       case 6: content = renderIncomeStep(); break;
       case 7: content = renderInviteStep(); break;
       case 8: content = renderVideoStep(); break;
-      default: content = <div>Erro</div>;
+      default: content = <div>Erro: Passo {step} não encontrado. <button onClick={() => setStep(1)} className="text-primary-mid underline">Reiniciar</button></div>;
     }
   } else {
     // P2 Flow
@@ -566,7 +538,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
       case 3: content = renderIncomeStep(); break;
       case 4: content = renderCalendarStep(); break;
       case 5: content = renderVideoStep(); break;
-      default: content = <div>Erro</div>;
+      default: content = <div>Erro: Passo {step} não encontrado. <button onClick={() => setStep(1)} className="text-primary-mid underline">Reiniciar</button></div>;
     }
   }
 
