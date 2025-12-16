@@ -80,6 +80,34 @@ serve(async (req) => {
             console.log(`Successfully setup Couple ${couple.id} for P1 ${userId}`);
         }
 
+        // --- NEW: Handle Subscription Updates (Status Changes, Cancellations) ---
+        if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.deleted') {
+            const subscription = event.data.object;
+            const subscriptionId = subscription.id;
+            const status = subscription.status; // active, past_due, canceled, unpaid, etc.
+
+            console.log(`Processing Subscription Update: ${subscriptionId} -> ${status}`);
+
+            // Initialize Admin Client
+            const supabaseAdmin = createClient(
+                Deno.env.get("SUPABASE_URL") ?? "",
+                Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+            );
+
+            // Update Couple Status
+            const { error: updateError } = await supabaseAdmin
+                .from('couples')
+                .update({
+                    subscription_status: status
+                })
+                .eq('stripe_subscription_id', subscriptionId);
+
+            if (updateError) {
+                console.error(`Error updating subscription status for ${subscriptionId}:`, updateError);
+                return new Response("Error updating subscription", { status: 500 });
+            }
+        }
+
         return new Response(JSON.stringify({ received: true }), {
             headers: { "Content-Type": "application/json" },
             status: 200,

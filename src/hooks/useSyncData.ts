@@ -182,8 +182,8 @@ function mapInvestment(row: InvestmentRow): Investment {
         symbol: row.symbol || '',
         name: row.name || '',
         price: row.current_price || 0,
-        change: 0,
-        changePercent: 0,
+        change: (row.current_price || 0) * (row.change_percent || 0) / 100, // Approximate abs change
+        changePercent: row.change_percent || 0,
         shares: row.quantity || 0,
         type: 'stock',
         totalInvested: (row.quantity || 0) * (row.purchase_price || 0)

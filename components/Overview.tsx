@@ -81,7 +81,8 @@ const Overview: React.FC<OverviewProps> = ({ state, onNavigate, onCreateGoal, on
       assignee: 'both' as 'user1' | 'user2' | 'both',
       deadline: '',
       priority: 'medium' as 'high' | 'medium' | 'low',
-      linkedGoalId: ''
+      linkedGoalId: '',
+      financial_impact: 0
    });
 
    // New Transaction Form State
@@ -105,9 +106,32 @@ const Overview: React.FC<OverviewProps> = ({ state, onNavigate, onCreateGoal, on
       setIsEditingTransaction(false);
    };
 
-   // Helper to export CSV (Mock)
+   // Helper to export CSV (Real)
    const handleExport = () => {
-      alert("Exportando dados para CSV...");
+      const headers = ["Date", "Description", "Amount", "Type", "Category", "User"];
+      const rows = state.transactions.map(t => [
+         new Date(t.date).toLocaleDateString(),
+         `"${t.description.replace(/"/g, '""')}"`,
+         t.amount.toFixed(2),
+         t.type,
+         t.category,
+         t.userId === 'user1' ? state.userProfile.user1.name : state.userProfile.user2.name
+      ]);
+
+      const csvContent = [
+         headers.join(","),
+         ...rows.map(r => r.join(","))
+      ].join("\n");
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `transactions_${new Date().toISOString().split('T')[0]}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
    };
 
    // Helper to submit new goal
@@ -191,7 +215,8 @@ const Overview: React.FC<OverviewProps> = ({ state, onNavigate, onCreateGoal, on
             assignee: newTaskForm.assignee,
             deadline: newTaskForm.deadline || new Date(Date.now() + 86400000).toISOString(),
             priority: newTaskForm.priority,
-            linkedGoalId: newTaskForm.linkedGoalId || undefined
+            linkedGoalId: newTaskForm.linkedGoalId || undefined,
+            financial_impact: (newTaskForm as any).financial_impact || 0
          });
          setIsCreateTaskOpen(false);
          setNewTaskForm({ title: '', assignee: 'both', deadline: '', priority: 'medium', linkedGoalId: '' });
@@ -321,10 +346,11 @@ const Overview: React.FC<OverviewProps> = ({ state, onNavigate, onCreateGoal, on
    const lastTasks = state.tasks.slice(0, 4);
    const activeGoals = state.goals.filter(g => g.status === 'in-progress').slice(0, 3);
 
-   // Investments Data (Mock based on InvestmentsView)
-   const totalInvested = 12500.00;
-   const currentVal = 13165.00;
-   const profitability = 5.32;
+   // Investments Data (Real Calculations)
+   const totalInvested = state.investments.reduce((acc, curr) => acc + (curr.totalInvested || 0), 0);
+   const currentVal = state.investments.reduce((acc, curr) => acc + (curr.price * curr.shares), 0);
+   const totalChange = currentVal - totalInvested;
+   const profitability = totalInvested > 0 ? ((totalChange / totalInvested) * 100).toFixed(2) : "0.00";
 
    // Goal Overlay Content
    const renderGoalOverlay = () => {
@@ -638,6 +664,23 @@ const Overview: React.FC<OverviewProps> = ({ state, onNavigate, onCreateGoal, on
                                  onChange={e => setNewTaskForm({ ...newTaskForm, deadline: e.target.value })}
                                  className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:border-primary-mid outline-none"
                               />
+                           </div>
+
+                           {/* FINANCIAL IMPACT */}
+                           <div>
+                              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Impacto Financeiro (Opcional)</label>
+                              <div className="relative">
+                                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-bold">R$</span>
+                                 <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="0,00"
+                                    value={(newTaskForm as any).financial_impact || ''}
+                                    onChange={e => setNewTaskForm({ ...newTaskForm, financial_impact: parseFloat(e.target.value) } as any)}
+                                    className="w-full pl-8 p-3 bg-gray-50 rounded-xl border border-gray-200 focus:border-primary-mid outline-none"
+                                 />
+                              </div>
                            </div>
 
                            {/* LINK GOAL SELECTION */}

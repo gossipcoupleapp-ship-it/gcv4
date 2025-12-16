@@ -95,12 +95,12 @@ export class GeminiService {
       .select('amount, type, category, date, description')
       .eq('couple_id', coupleId)
       .order('date', { ascending: false })
-      .limit(10); // Last 10 for context
+      .limit(10) as { data: Transaction[] | null };
 
     const { data: allTrans } = await supabase
       .from('transactions')
       .select('amount, type')
-      .eq('couple_id', coupleId);
+      .eq('couple_id', coupleId) as { data: Pick<Transaction, 'amount' | 'type'>[] | null };
 
     const balance = allTrans?.reduce((acc, t) => {
       return t.type === 'income' ? acc + t.amount : acc - t.amount;
@@ -111,7 +111,7 @@ export class GeminiService {
       .from('goals')
       .select('title, current_amount, target_amount')
       .eq('couple_id', coupleId)
-      .eq('status', 'in-progress');
+      .eq('status', 'in-progress') as { data: any[] | null }; // Using any to avoid strict Goal type mismatch if DB columns differ slightly
 
     return {
       balance,
@@ -140,10 +140,26 @@ export class GeminiService {
     }
   }
 
+  // Fetch recent messages for context (last 12h)
+  async getRecentMessages(coupleId: string): Promise<string> {
+    const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
+
+    const { data } = await supabase
+      .from('messages')
+      .select('role, text, created_at')
+      .eq('couple_id', coupleId)
+      .gt('created_at', twelveHoursAgo)
+      .order('created_at', { ascending: true }) as { data: { role: string, text: string }[] | null };
+
+    if (!data || data.length === 0) return '';
+
+    return data.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`).join('\n');
+  }
+
   async chatWithAgent(
     message: string,
-    coupleId: string, // Changed from AppState to coupleId
-    currentState: AppState, // Kept for assignee names/profile access if needed, but we rely on DB for financial data
+    coupleId: string,
+    currentState: AppState,
     actionCallbacks: {
       onTransaction: (t: Omit<Transaction, 'id' | 'userId'>) => void,
       onGoal: (g: Omit<Goal, 'id' | 'currentAmount' | 'status'>) => void,
@@ -153,21 +169,29 @@ export class GeminiService {
   ) {
     // Build RAG Context
     const context = await this.buildContext(coupleId);
+    const history = await this.getRecentMessages(coupleId);
 
     const systemInstruction = `
-      You are a sophisticated AI financial planner for a couple (${currentState.userProfile.user1.name} and ${currentState.userProfile.user2.name}).
-      Your goal is to manage their finances, calendar, and tasks.
+      You are the "Gossip Couple Assistant" — a witty, fun, but extremely capable financial planner for ${currentState.userProfile.coupleName} (${currentState.userProfile.user1.name} & ${currentState.userProfile.user2.name}).
+      
+      PERSONA:
+      - Tone: Friendly, slightly informal (like a smart best friend), encouraging, but serious when it comes to numbers.
+      - Use emojis occasionally ✨.
+      - Be proactive: suggested shared goals or date ideas that are budget-friendly.
+      
+      CONTEXT:
       Current Date: ${new Date().toLocaleDateString()}
+      Total Balance: R$ ${context.balance.toFixed(2)}
+      Active Goals: ${context.activeGoals.map((g: any) => `${g.title} (${g.current_amount}/${g.target_amount})`).join(', ')}
+      Recent Transactions: ${context.recentTransactions.map(t => `${t.category}: ${t.amount}`).join(', ')}
       
-      REAL-TIME FINANCIAL CONTEXT (FROM DATABASE):
-      - Total Balance (Net Worth): R$ ${context.balance.toFixed(2)}
-      - Active Goals: ${context.activeGoals.map(g => `${g.title} (${g.current_amount}/${g.target_amount})`).join(', ')}
-      - Recent Transactions: \n${context.recentTransactions.map(t => `- ${t.date}: ${t.category} (R$ ${t.amount}) [${t.type}]`).join('\n')}
+      RECENT CHAT HISTORY:
+      ${history}
       
-      Tone: Professional, minimalist, tech-forward, helpful.
-      
-      When the user asks to perform an action, call the appropriate tool.
-      If creating a task that involves paying something (like "Pay rent" or "Buy groceries"), ALWAYS use the 'financial_impact' parameter in 'createTask' to specify the cost.
+      INSTRUCTIONS:
+      - Answer the user's request using the history context if needed.
+      - Call tools when the user wants to perform an action.
+      - If creating a task that involves money, ALWAYS specify 'financial_impact'.
     `;
 
     const tools: Tool[] = [{
@@ -187,7 +211,7 @@ export class GeminiService {
 
       const response = result;
       const functionCalls = response.functionCalls;
-      let replyText = response.text || "Action processed.";
+      let replyText = response.text || "Entendido! ✨";
 
       if (functionCalls && functionCalls.length > 0) {
         for (const call of functionCalls) {
@@ -201,14 +225,14 @@ export class GeminiService {
               type: args.type as 'income' | 'expense',
               date: args.date || new Date().toISOString()
             });
-            replyText = `I've registered a ${args.type} of R$${args.amount} for ${args.category}.`;
+            replyText = `Registrei ${args.type === 'expense' ? 'uma despesa' : 'uma receita'} de R$${args.amount} em ${args.category}. 💸`;
           } else if (call.name === 'createGoal') {
             actionCallbacks.onGoal({
               title: args.title,
               targetAmount: args.targetAmount,
               deadline: args.deadline || new Date(Date.now() + 86400000 * 30).toISOString()
             });
-            replyText = `New goal created: ${args.title} with a target of R$${args.targetAmount}.`;
+            replyText = `Uhu! Novo objetivo criado: ${args.title} (Meta: R$${args.targetAmount}). 🚀`;
           } else if (call.name === 'createTask') {
             actionCallbacks.onTask({
               title: args.title,
@@ -218,7 +242,8 @@ export class GeminiService {
               linkedGoalId: args.linkedGoalId,
               financial_impact: args.financial_impact || 0
             });
-            replyText = `Task assigned to ${args.assignee}: ${args.title}.`;
+            const impactString = args.financial_impact ? ` (R$${args.financial_impact})` : '';
+            replyText = `Tarefa atribuída para ${args.assignee === 'both' ? 'os dois' : args.assignee}: ${args.title}${impactString}. ✅`;
           } else if (call.name === 'createEvent') {
             actionCallbacks.onEvent({
               title: args.title,
@@ -226,7 +251,7 @@ export class GeminiService {
               end: args.end,
               type: args.type || 'social'
             });
-            replyText = `Added "${args.title}" to your calendar.`;
+            replyText = `Adicionei "${args.title}" ao calendário! 📅`;
           }
         }
       }
@@ -235,7 +260,7 @@ export class GeminiService {
 
     } catch (error) {
       console.error("Chat Error:", error);
-      return { text: "I encountered an error processing your request.", functionCalls: undefined, payload: undefined };
+      return { text: "Ops, tive um probleminha técnico aqui. Pode repetir? 😅", functionCalls: undefined, payload: undefined };
     }
   }
 

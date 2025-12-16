@@ -82,7 +82,7 @@ const MainApp: React.FC = () => {
     if (user) {
       // Check Google Calendar Connection
       const checkIntegration = async () => {
-        const { data } = await supabase.from('user_integrations').select('id').eq('user_id', user.id).single();
+        const { data } = await supabase.from('user_integrations').select('id').eq('user_id', user.id).maybeSingle();
         if (data) setCalendarConnected(true);
       };
       checkIntegration();
@@ -108,7 +108,14 @@ const MainApp: React.FC = () => {
     const sessionId = params.get('session_id');
     const code = params.get('code');
 
-    if (token) setInviteToken(token);
+    if (token) {
+      setInviteToken(token);
+      localStorage.setItem('gossip_invite_token', token);
+    } else {
+      // Try to recover from storage if not in URL
+      const savedToken = localStorage.getItem('gossip_invite_token');
+      if (savedToken) setInviteToken(savedToken);
+    }
 
     if (code) {
       const handleGoogleAuth = async () => {
@@ -209,18 +216,93 @@ const MainApp: React.FC = () => {
 
   const handleCreateTask = async (t: Omit<Task, 'id'>) => {
     if (!couple?.id) return;
-    const { error } = await (supabase.from('tasks') as any).insert({
+
+    // 1. Create Task
+    const { data: taskData, error: taskError } = await (supabase.from('tasks') as any).insert({
       title: t.title,
       couple_id: couple.id,
       assigned_to: t.assignee === 'user1' ? user?.id : null,
       status: t.completed ? 'completed' : 'pending',
       due_date: new Date(t.deadline).toISOString(),
-      priority: t.priority || 'medium'
+      priority: t.priority || 'medium',
+      financial_impact: t.financial_impact || 0
+    }).select().single();
+
+    if (taskError) {
+      console.error("Error creating task:", taskError);
+      return;
+    }
+
+    const taskId = taskData?.id;
+
+    // 2. Create Shadow Transaction (if applicable)
+    if (t.financial_impact && t.financial_impact > 0 && taskId) {
+      const { error: transError } = await (supabase.from('transactions') as any).insert({
+        couple_id: couple.id,
+        amount: t.financial_impact,
+        category: 'Pending Task', // Or infer from AI?
+        description: `Shadow: ${t.title}`,
+        date: new Date(t.deadline).toISOString(),
+        type: 'expense',
+        status: 'pending',
+        linked_task_id: taskId
+      });
+      if (transError) console.error("Error creating shadow transaction:", transError);
+    }
+
+    // 3. Create Calendar Event
+    if (taskId) {
+      const eventTitle = t.financial_impact ? `${t.title} (R$${t.financial_impact})` : t.title;
+      const startTime = new Date(t.deadline).toISOString();
+      const endTime = new Date(new Date(t.deadline).getTime() + 60 * 60 * 1000).toISOString();
+
+      const { error: eventError } = await (supabase.from('events') as any).insert({
+        couple_id: couple.id,
+        title: eventTitle,
+        start_time: startTime,
+        end_time: endTime, // 1 hour duration
+        type: 'task',
+        linked_task_id: taskId
+      });
+      if (eventError) console.error("Error creating calendar event:", eventError);
+
+      // Sync to Google Calendar
+      if (calendarConnected) {
+        CalendarService.syncEvent({
+          title: eventTitle,
+          start: startTime,
+          end: endTime,
+          type: 'task',
+          description: `Task assigned to ${t.assignee}`
+        }).then(res => {
+          if (res.success) console.log("Synced task to Google Calendar:", res.link);
+        });
+      }
+    }
+  };
+
+  const handleCreateEvent = async (e: Omit<CalendarEvent, 'id'>) => {
+    if (!couple?.id) return;
+    const { error } = await (supabase.from('events') as any).insert({
+      couple_id: couple.id,
+      title: e.title,
+      start_time: e.start,
+      end_time: e.end,
+      type: e.type
     });
-    if (error) console.error("Error creating task:", error);
+
+    if (error) {
+      console.error("Error creating event:", error);
+      return;
+    }
+
+    if (calendarConnected) {
+      await CalendarService.syncEvent(e);
+    }
   };
 
   const handleUpdateTask = async (t: Task) => {
+    // 1. Update Task
     const { error } = await (supabase.from('tasks') as any).update({
       title: t.title,
       status: t.completed ? 'completed' : 'pending',
@@ -228,7 +310,21 @@ const MainApp: React.FC = () => {
       due_date: new Date(t.deadline).toISOString(),
       priority: t.priority
     }).eq('id', t.id);
-    if (error) console.error("Error updating task:", error);
+
+    if (error) {
+      console.error("Error updating task:", error);
+      return;
+    }
+
+    // 2. Triad Completion Logic
+    if (t.completed) {
+      // Find linked transaction and mark as paid
+      const { error: transError } = await (supabase.from('transactions') as any)
+        .update({ status: 'paid' })
+        .eq('linked_task_id', t.id);
+
+      if (transError) console.error("Error updating shadow transaction:", transError);
+    }
   };
 
   const handleUpdateUser = async (u: Partial<UserDetail>) => {
@@ -250,20 +346,76 @@ const MainApp: React.FC = () => {
     if (error) console.error("Error updating couple:", error);
   };
 
+  // Effect: Load Chat History on Mount (12h context)
+  useEffect(() => {
+    if (couple?.id && isChatModalOpen) {
+      const loadHistory = async () => {
+        const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
+        const { data } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('couple_id', couple.id)
+          .gt('created_at', twelveHoursAgo)
+          .order('created_at', { ascending: true });
+
+        if (data) {
+          const formatted: ChatMessage[] = data.map((m: any) => ({
+            id: m.id,
+            role: m.role as 'user' | 'model',
+            text: m.text,
+            timestamp: new Date(m.created_at).getTime(),
+            payload: m.payload
+          }));
+          setChatMessages(formatted);
+        }
+      };
+      loadHistory();
+    }
+  }, [couple, isChatModalOpen]);
+
+  // ... (handlers)
+
   const handleChatSend = async (text: string) => {
+    if (!couple?.id) return;
+
+    // 1. Optimistic Update
     const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', text, timestamp: Date.now() };
     setChatMessages(prev => [...prev, userMsg]);
     setIsChatThinking(true);
+
+    // 2. Persist User Message
+    await (supabase.from('messages') as any).insert({
+      couple_id: couple.id,
+      role: 'user',
+      text: text
+    });
+
     try {
-      if (!couple?.id) throw new Error("Couple ID missing");
       const response = await gemini.chatWithAgent(text, couple.id, state, {
         onTransaction: handleCreateTransaction,
         onGoal: handleCreateGoal,
         onTask: handleCreateTask,
-        onEvent: (e) => { }
+        onEvent: handleCreateEvent
       });
-      const aiMsg: ChatMessage = { id: (Date.now() + 1).toString(), role: 'model', text: response.text, timestamp: Date.now(), payload: response.payload };
+
+      const aiMsg: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        role: 'model',
+        text: response.text || "...",
+        timestamp: Date.now(),
+        payload: response.payload
+      };
+
       setChatMessages(prev => [...prev, aiMsg]);
+
+      // 3. Persist AI Response
+      await (supabase.from('messages') as any).insert({
+        couple_id: couple.id,
+        role: 'model',
+        text: response.text || "...",
+        payload: response.payload || null
+      });
+
     } catch (e) {
       setChatMessages(prev => [...prev, { id: 'err', role: 'model', text: "Erro ao processar.", timestamp: Date.now() }]);
     } finally {
@@ -300,23 +452,49 @@ const MainApp: React.FC = () => {
     return <Onboarding userRole="P2" inviteToken={inviteToken} calendarConnected={calendarConnected} onFinish={() => window.location.href = '/'} />;
   }
 
-  // Guard: P1 Payment
-  if (isP1 && !subscriptionActive) {
+  // Guard: Payment / Subscription Check (Strict for BOTH)
+  if (!subscriptionActive) {
+    // 1. Success Return Handling
     const params = new URLSearchParams(window.location.search);
     if (params.get('session_id')) {
       return <PaymentSuccess />;
     }
 
-    // Auto Subscribe UI
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-gray-50 text-center animate-fade-in">
-        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full">
-          <Loader2 className="animate-spin text-primary-mid mx-auto mb-4" size={40} />
-          <h1 className="text-xl font-bold mb-2">Preparando Checkout Seguro</h1>
-          <p className="text-gray-500 text-sm">Transferindo você para o Stripe...</p>
+    // 2. P1 Flow (Payer) - Auto Redirect/Loader
+    if (isP1) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-gray-50 text-center animate-fade-in">
+          <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full">
+            <Loader2 className="animate-spin text-primary-mid mx-auto mb-4" size={40} />
+            <h1 className="text-xl font-bold mb-2">Renovando Acesso</h1>
+            <p className="text-gray-500 text-sm">Transferindo você para o pagamento...</p>
+          </div>
         </div>
-      </div>
-    );
+      );
+    }
+
+    // 3. P2 Flow (Invited) - Access Blocked Message
+    if (isP2) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-gray-50 text-center animate-fade-in">
+          <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full">
+            <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4 text-red-500">
+              <LogOut size={32} />
+            </div>
+            <h1 className="text-xl font-bold mb-2 text-gray-900">Assinatura Pausada</h1>
+            <p className="text-gray-500 mb-6">
+              A assinatura do casal está inativa. Peça para seu parceiro(a) (P1) regularizar o pagamento para vocês voltarem a usar o Gossip Couple.
+            </p>
+            <button onClick={handleLogout} className="text-red-500 font-medium hover:underline text-sm">
+              Sair desta conta
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Fallback (Should typically not reach here if role is defined, but safe to show generic loader or nothing)
+    return <div className="h-screen w-full flex items-center justify-center"><Loader2 className="animate-spin text-gray-400" /></div>;
   }
 
   // Guard: Onboarding Incomplete
@@ -406,7 +584,13 @@ const MainApp: React.FC = () => {
                 onUpdateGoal={handleUpdateGoal}
               />
             )}
-            {activeTab === Tab.INVESTMENTS && <InvestmentsView investments={state.investments} />}
+            {activeTab === Tab.INVESTMENTS && (
+              <InvestmentsView
+                state={state}
+                onUpdateGoal={handleUpdateGoal}
+                onCreateTransaction={handleCreateTransaction}
+              />
+            )}
             {activeTab === Tab.NEWS && <NewsView />}
             {activeTab === Tab.SETTINGS && (
               <SettingsView

@@ -52,6 +52,7 @@ export interface Task {
   completed: boolean;
   linkedGoalId?: string;
   priority?: 'high' | 'medium' | 'low';
+  financial_impact?: number;
 }
 
 export interface CalendarEvent {

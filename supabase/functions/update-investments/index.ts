@@ -88,8 +88,7 @@ Deno.serve(async (req) => {
                 .from('investments')
                 .update({
                     current_price: pData.price,
-                    // If we had a 'change_percent' column we'd update it too, but spec only had current_price.
-                    // We can update updated_at implicitly.
+                    change_percent: pData.change_percent
                 })
                 .eq('symbol', symbol)
 

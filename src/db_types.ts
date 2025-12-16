@@ -223,6 +223,7 @@ export interface Database {
                     quantity: number | null
                     purchase_price: number | null
                     current_price: number | null
+                    change_percent: number | null
                     created_at: string
                 }
                 Insert: {
@@ -233,6 +234,7 @@ export interface Database {
                     quantity?: number | null
                     purchase_price?: number | null
                     current_price?: number | null
+                    change_percent?: number | null
                     created_at?: string
                 }
                 Update: {
@@ -243,6 +245,7 @@ export interface Database {
                     quantity?: number | null
                     purchase_price?: number | null
                     current_price?: number | null
+                    change_percent?: number | null
                     created_at?: string
                 }
             }
