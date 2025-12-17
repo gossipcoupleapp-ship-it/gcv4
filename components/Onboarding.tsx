@@ -108,6 +108,27 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
     }
   }, [userRole, step, inviteLink]);
 
+  // 4a. Poll Integration Status (Fail-safe for Calendar Step)
+  useEffect(() => {
+    // Only poll if we are on the calendar step and think we are NOT connected
+    const isCalendarStep = (userRole === 'P1' && step === 4) || (userRole === 'P2' && step === 4);
+
+    if (isCalendarStep && !data.calendarConnected && !calendarConnected) {
+      const checkInt = async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const { data } = await supabase.from('user_integrations').select('id').eq('user_id', user.id).maybeSingle();
+          if (data) {
+            setData(prev => ({ ...prev, calendarConnected: true }));
+          }
+        }
+      };
+
+      const interval = setInterval(checkInt, 2000);
+      return () => clearInterval(interval);
+    }
+  }, [step, userRole, data.calendarConnected, calendarConnected]);
+
 
   // 5. Handlers
 

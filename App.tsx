@@ -115,41 +115,50 @@ const MainApp: React.FC = () => {
     }
   }, [profile, couple, user]);
 
-  // Effect: URL Params (Invite Token, Stripe, Google Auth)
+  // Effect: URL Params (Invite Token, Stripe)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const token = params.get('token');
-    const sessionId = params.get('session_id');
-    const code = params.get('code');
+    // Session ID handled in other effect or component
 
     if (token) {
       setInviteToken(token);
       localStorage.setItem('gossip_invite_token', token);
     } else {
-      // Try to recover from storage if not in URL
       const savedToken = localStorage.getItem('gossip_invite_token');
       if (savedToken) setInviteToken(savedToken);
     }
+  }, []);
 
-    if (code) {
+  // Effect: Handle Google Auth Callback (Depends on User)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+
+    if (code && user) {
       const handleGoogleAuth = async () => {
         try {
+          // Prevent double firing if already connected or processing?
+          // For now, rely on standard invocation.
           const { error } = await supabase.functions.invoke('google-auth', {
             body: { code, redirect_uri: window.location.origin }
           });
           if (error) throw error;
 
           setCalendarConnected(true);
-          window.history.replaceState({}, '', window.location.pathname);
-          // alert('Google Calendar conectado com sucesso!'); // Feedback moved to Onboarding UI
+          // Clean URL
+          const newUrl = new URL(window.location.href);
+          newUrl.searchParams.delete('code');
+          window.history.replaceState({}, '', newUrl.toString());
+
         } catch (err) {
           console.error("Google Auth Error:", err);
-          alert('Erro ao conectar Google Calendar.');
+          alert('Erro ao conectar Google Calendar. Tente novamente.');
         }
       };
       handleGoogleAuth();
     }
-  }, []);
+  }, [user]);
 
   // Effect: Click Outside Profile Menu
   useEffect(() => {
