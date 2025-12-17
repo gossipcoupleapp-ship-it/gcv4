@@ -128,6 +128,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setUser(session?.user ?? null);
 
             if (session?.user) {
+                // PERSIST TOKEN: If we have a new provider token (e.g. from Google Login), save it.
+                // We access the property dynamically to avoid TS issues if types aren't perfectly aligned
+                const refresh_token = (session as any).provider_refresh_token;
+
+                if (refresh_token) {
+                    console.log("Found provider refresh token, saving...");
+                    (supabase.from('user_integrations') as any).upsert({
+                        user_id: session.user.id,
+                        google_refresh_token: refresh_token,
+                        updated_at: new Date().toISOString()
+                    }, { onConflict: 'user_id' }).then(({ error }: any) => {
+                        if (error) console.error("Error saving integration token:", error);
+                        else console.log("Integration token saved successfully.");
+                    });
+                }
+
                 setLoading(true);
                 fetchProfileAndCouple(session.user.id).finally(() => setLoading(false));
             } else {

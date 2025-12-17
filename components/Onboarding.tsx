@@ -384,20 +384,21 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
         </div>
       ) : (
         <button
-          onClick={() => {
-            // Explicit Save (Redundant due to effect, but safe)
+          onClick={async () => {
+            // Explicit Save
             try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ data, step })); } catch (e) { }
 
-            const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-            if (!clientId) {
-              console.error('Missing Google Client ID');
-              alert('Erro de configuração: Google Client ID não encontrado.');
-              return;
-            }
-            const redirectUri = window.location.origin;
-            const scope = 'https://www.googleapis.com/auth/calendar';
-            const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&access_type=offline&prompt=consent`;
-            window.location.href = url;
+            await supabase.auth.signInWithOAuth({
+              provider: 'google',
+              options: {
+                redirectTo: window.location.origin,
+                scopes: 'https://www.googleapis.com/auth/calendar',
+                queryParams: {
+                  access_type: 'offline',
+                  prompt: 'consent',
+                },
+              }
+            });
           }}
           className="w-full py-4 bg-white border-2 border-gray-200 text-gray-700 font-bold rounded-xl hover:bg-gray-50 transition-all flex items-center justify-center gap-2"
         >
