@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Investment, AppState, ChatMessage, Goal } from '../types';
 import { GeminiService } from '../services/geminiService';
-import { supabase } from '../services/supabase';
+import { supabase } from '../src/lib/supabase';
 import {
    TrendingUp,
    Send,
@@ -90,7 +90,7 @@ const InvestmentsView: React.FC<InvestmentsViewProps> = ({ state, onUpdateGoal, 
       // 2. Update Investment in Supabase
       // We assume ID is available or we key by symbol
       const newShares = amount / selectedAsset.price;
-      const { error } = await supabase.from('investments').update({
+      const { error } = await (supabase.from('investments') as any).update({
          quantity: selectedAsset.shares + newShares,
          // We technically should track average price, but for now we just increment totalInvested implicitly if we had a column? 
          // Logic: totalInvested isn't a column in DB based on types, it is derived? 
@@ -212,7 +212,7 @@ const InvestmentsView: React.FC<InvestmentsViewProps> = ({ state, onUpdateGoal, 
 
    const shortcuts = [
       { label: "No que podemos investir?", prompt: "Considerando nosso perfil de risco e o mercado atual, no que podemos investir hoje?" },
-      { label: `Acelerar meta: ${state.goals?.[0]?.title || 'Viagem'}`, prompt: `Para acelerar nossa meta '${state.goals?.[0]?.title || 'Financeira'}', o que podemos fazer e investir?` },
+      { label: `Acelerar meta: ${state?.goals?.[0]?.title || 'Viagem'}`, prompt: `Para acelerar nossa meta '${state?.goals?.[0]?.title || 'Financeira'}', o que podemos fazer e investir?` },
       { label: "Plano de ação mensal", prompt: "Gere um plano de ação mensal para turbinar nossos investimentos." }
    ];
 
@@ -226,11 +226,11 @@ const InvestmentsView: React.FC<InvestmentsViewProps> = ({ state, onUpdateGoal, 
       const profitPercent = invested > 0 ? (profit / invested) * 100 : 0;
 
       // Linked Goal
-      const linkedGoal = state.goals?.find(g => g.id === selectedAsset.linkedGoalId);
+      const linkedGoal = state?.goals?.find(g => g.id === selectedAsset.linkedGoalId);
       const goalProgress = linkedGoal ? Math.min(100, (linkedGoal.currentAmount / linkedGoal.targetAmount) * 100) : 0;
 
       // Linked Tasks (Assume linked via Goal)
-      const linkedTasks = linkedGoal ? (state.tasks?.filter(t => t.linkedGoalId === linkedGoal.id) || []) : [];
+      const linkedTasks = linkedGoal ? (state?.tasks?.filter(t => t.linkedGoalId === linkedGoal.id) || []) : [];
 
       return (
          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
