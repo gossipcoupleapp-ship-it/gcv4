@@ -121,7 +121,7 @@ const InvestmentsView: React.FC<InvestmentsViewProps> = ({ state, onUpdateGoal, 
 
       // 3. Update Linked Goal Global State (if applicable)
       if (selectedAsset.linkedGoalId && onUpdateGoal) {
-         const linkedGoal = state.goals.find(g => g.id === selectedAsset.linkedGoalId);
+         const linkedGoal = state.goals?.find(g => g.id === selectedAsset.linkedGoalId);
          if (linkedGoal) {
             onUpdateGoal({
                ...linkedGoal,
@@ -212,7 +212,7 @@ const InvestmentsView: React.FC<InvestmentsViewProps> = ({ state, onUpdateGoal, 
 
    const shortcuts = [
       { label: "No que podemos investir?", prompt: "Considerando nosso perfil de risco e o mercado atual, no que podemos investir hoje?" },
-      { label: `Acelerar meta: ${state.goals[0]?.title || 'Viagem'}`, prompt: `Para acelerar nossa meta '${state.goals[0]?.title || 'Financeira'}', o que podemos fazer e investir?` },
+      { label: `Acelerar meta: ${state.goals?.[0]?.title || 'Viagem'}`, prompt: `Para acelerar nossa meta '${state.goals?.[0]?.title || 'Financeira'}', o que podemos fazer e investir?` },
       { label: "Plano de ação mensal", prompt: "Gere um plano de ação mensal para turbinar nossos investimentos." }
    ];
 
@@ -226,11 +226,11 @@ const InvestmentsView: React.FC<InvestmentsViewProps> = ({ state, onUpdateGoal, 
       const profitPercent = invested > 0 ? (profit / invested) * 100 : 0;
 
       // Linked Goal
-      const linkedGoal = state.goals.find(g => g.id === selectedAsset.linkedGoalId);
+      const linkedGoal = state.goals?.find(g => g.id === selectedAsset.linkedGoalId);
       const goalProgress = linkedGoal ? Math.min(100, (linkedGoal.currentAmount / linkedGoal.targetAmount) * 100) : 0;
 
       // Linked Tasks (Assume linked via Goal)
-      const linkedTasks = linkedGoal ? state.tasks.filter(t => t.linkedGoalId === linkedGoal.id) : [];
+      const linkedTasks = linkedGoal ? (state.tasks?.filter(t => t.linkedGoalId === linkedGoal.id) || []) : [];
 
       return (
          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">

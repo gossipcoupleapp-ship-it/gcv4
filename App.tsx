@@ -82,8 +82,13 @@ const MainApp: React.FC = () => {
     if (user) {
       // Check Google Calendar Connection
       const checkIntegration = async () => {
-        const { data } = await supabase.from('user_integrations').select('id').eq('user_id', user.id).maybeSingle();
-        if (data) setCalendarConnected(true);
+        try {
+          const { data } = await supabase.from('user_integrations').select('id').eq('user_id', user.id).maybeSingle();
+          if (data) setCalendarConnected(true);
+        } catch (e) {
+          // Suppress 400/404 errors for integrations if table doesn't exist or RLS blocks
+          console.warn("Integration check skipped:", e);
+        }
       };
       checkIntegration();
     }
