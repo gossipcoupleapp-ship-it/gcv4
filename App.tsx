@@ -92,7 +92,7 @@ const MainApp: React.FC = () => {
       // Check Google Calendar Connection
       const checkIntegration = async () => {
         try {
-          const { data } = await supabase.from('user_integrations').select('id').eq('user_id', user.id).maybeSingle();
+          const { data } = await supabase.from('user_integrations').select('user_id').eq('user_id', user.id).maybeSingle();
           if (data) setCalendarConnected(true);
         } catch (e) {
           // Suppress 400/404 errors for integrations if table doesn't exist or RLS blocks
@@ -136,27 +136,15 @@ const MainApp: React.FC = () => {
     const code = params.get('code');
 
     if (code && user) {
-      const handleGoogleAuth = async () => {
-        try {
-          // Prevent double firing if already connected or processing?
-          // For now, rely on standard invocation.
-          const { error } = await supabase.functions.invoke('google-auth', {
-            body: { code, redirect_uri: window.location.origin }
-          });
-          if (error) throw error;
+      // 1. Clear the code from URL (Supabase AuthContext handles the session/token extraction)
+      const newUrl = new URL(window.location.href);
+      newUrl.searchParams.delete('code');
+      window.history.replaceState({}, '', newUrl.toString());
 
-          setCalendarConnected(true);
-          // Clean URL
-          const newUrl = new URL(window.location.href);
-          newUrl.searchParams.delete('code');
-          window.history.replaceState({}, '', newUrl.toString());
-
-        } catch (err) {
-          console.error("Google Auth Error:", err);
-          alert('Erro ao conectar Google Calendar. Tente novamente.');
-        }
-      };
-      handleGoogleAuth();
+      // 2. Optimistically set connected (it will be verified by the checkIntegration/polling)
+      // We don't call google-auth here because AuthContext captures the provider_token from the session
+      // automatically when Supabase processes the redirect code.
+      // Calling it manually causes "Invalid Grant" because the code is one-time use.
     }
   }, [user]);
 
