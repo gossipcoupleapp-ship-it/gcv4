@@ -75,11 +75,15 @@ serve(async (req) => {
                 console.error('DB Error:', dbError);
                 throw new Error('Failed to save integration');
             }
+        } else {
+            // CRITICAL: If no refresh_token, we cannot maintain the connection.
+            console.error('No refresh_token returned by Google.');
+            throw new Error('Google did not return a refresh token. Please try again and ensure you allow all permissions.');
         }
 
         return new Response(JSON.stringify({ success: true }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            status: 200,
+            status: 200, // Explicit 200 OK
         });
 
     } catch (error: any) {
