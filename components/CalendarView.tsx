@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { CalendarEvent, Goal } from '../types';
-import { supabase } from '../services/supabase';
+import { supabase } from '../src/lib/supabase';
 import {
    ChevronLeft,
    ChevronRight,
@@ -173,8 +173,8 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, goals = [], onAddEv
                      <div key={evt.id} className="text-[10px] bg-white border border-gray-100 shadow-sm p-1.5 rounded-lg truncate text-gray-600 group-hover:border-primary-mid/30 group-hover:text-primary-mid transition-colors flex items-center justify-between">
                         <div className="flex items-center truncate">
                            <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0 ${evt.type === 'social' ? 'bg-pink-400' :
-                                 evt.type === 'finance' ? 'bg-green-400' :
-                                    evt.type === 'work' ? 'bg-blue-400' : 'bg-gray-400'
+                              evt.type === 'finance' ? 'bg-green-400' :
+                                 evt.type === 'work' ? 'bg-blue-400' : 'bg-gray-400'
                               }`}></span>
                            <span className="truncate">{evt.title}</span>
                         </div>
@@ -260,9 +260,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, goals = [], onAddEv
                               {new Date(evt.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                            </span>
                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide border ${evt.type === 'task' ? 'bg-blue-50 text-blue-600 border-blue-100' :
-                                 evt.type === 'finance' ? 'bg-green-50 text-green-600 border-green-100' :
-                                    evt.type === 'social' ? 'bg-pink-50 text-pink-600 border-pink-100' :
-                                       'bg-gray-50 text-gray-600 border-gray-100'
+                              evt.type === 'finance' ? 'bg-green-50 text-green-600 border-green-100' :
+                                 evt.type === 'social' ? 'bg-pink-50 text-pink-600 border-pink-100' :
+                                    'bg-gray-50 text-gray-600 border-gray-100'
                               }`}>
                               {evt.type}
                            </span>
@@ -306,8 +306,8 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, goals = [], onAddEv
                            <div className="flex justify-between items-start mb-2">
                               <div className="flex items-center gap-2">
                                  <span className={`w-2 h-2 rounded-full ${evt.type === 'social' ? 'bg-pink-400' :
-                                       evt.type === 'finance' ? 'bg-green-400' :
-                                          evt.type === 'work' ? 'bg-blue-400' : 'bg-gray-400'
+                                    evt.type === 'finance' ? 'bg-green-400' :
+                                       evt.type === 'work' ? 'bg-blue-400' : 'bg-gray-400'
                                     }`}></span>
                                  <span className="text-[10px] font-bold uppercase text-gray-400">{evt.type}</span>
                                  {evt.synced && (
@@ -523,9 +523,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, goals = [], onAddEv
                <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md relative overflow-hidden animate-scale-in">
                   {/* Decorative Header */}
                   <div className={`h-24 w-full bg-gradient-to-r ${selectedEvent.type === 'social' ? 'from-pink-400 to-rose-400' :
-                        selectedEvent.type === 'finance' ? 'from-emerald-400 to-teal-400' :
-                           selectedEvent.type === 'work' ? 'from-blue-400 to-indigo-400' :
-                              'from-gray-400 to-gray-500'
+                     selectedEvent.type === 'finance' ? 'from-emerald-400 to-teal-400' :
+                        selectedEvent.type === 'work' ? 'from-blue-400 to-indigo-400' :
+                           'from-gray-400 to-gray-500'
                      }`}>
                      <button
                         onClick={() => setSelectedEvent(null)}
@@ -539,8 +539,8 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, goals = [], onAddEv
                      {/* Icon Badge */}
                      <div className="w-20 h-20 rounded-2xl bg-white p-1 shadow-lg mb-4">
                         <div className={`w-full h-full rounded-xl flex items-center justify-center ${selectedEvent.type === 'social' ? 'bg-pink-50 text-pink-500' :
-                              selectedEvent.type === 'finance' ? 'bg-emerald-50 text-emerald-500' :
-                                 'bg-blue-50 text-blue-500'
+                           selectedEvent.type === 'finance' ? 'bg-emerald-50 text-emerald-500' :
+                              'bg-blue-50 text-blue-500'
                            }`}>
                            <CalendarIcon size={32} />
                         </div>
@@ -551,8 +551,8 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, goals = [], onAddEv
                            <h3 className="text-2xl font-bold text-gray-900 mb-1">{selectedEvent.title}</h3>
                            <p className="text-gray-500 mb-6 flex items-center text-sm">
                               <span className={`w-2 h-2 rounded-full mr-2 ${selectedEvent.type === 'social' ? 'bg-pink-400' :
-                                    selectedEvent.type === 'finance' ? 'bg-emerald-400' :
-                                       'bg-blue-400'
+                                 selectedEvent.type === 'finance' ? 'bg-emerald-400' :
+                                    'bg-blue-400'
                                  }`}></span>
                               {selectedEvent.type.charAt(0).toUpperCase() + selectedEvent.type.slice(1)} Event
                            </p>

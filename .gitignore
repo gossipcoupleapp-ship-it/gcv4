@@ -1,1 +1,14 @@
 node_modules
+
+# System
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Dependencies
+node_modules
+dist
+build

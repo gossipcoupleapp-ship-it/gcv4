@@ -388,7 +388,12 @@ const Onboarding: React.FC<OnboardingProps> = ({ userRole, inviteToken, onFinish
             // Explicit Save (Redundant due to effect, but safe)
             try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ data, step })); } catch (e) { }
 
-            const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || '74342658672-an85oqs0lb7us7lr1km1pgor3kdfnd8r.apps.googleusercontent.com';
+            const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+            if (!clientId) {
+              console.error('Missing Google Client ID');
+              alert('Erro de configuração: Google Client ID não encontrado.');
+              return;
+            }
             const redirectUri = window.location.origin;
             const scope = 'https://www.googleapis.com/auth/calendar';
             const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&access_type=offline&prompt=consent`;
