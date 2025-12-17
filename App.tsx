@@ -73,7 +73,16 @@ const MainApp: React.FC = () => {
   // Effect: Sync Data Update
   useEffect(() => {
     if (syncData && Object.keys(syncData).length > 0) {
-      setState(prev => ({ ...prev, ...syncData }));
+      setState(prev => ({
+        ...prev,
+        ...syncData,
+        // Enforce arrays never become undefined
+        goals: syncData.goals || [],
+        tasks: syncData.tasks || [],
+        transactions: syncData.transactions || [],
+        events: syncData.events || [],
+        investments: syncData.investments || []
+      }));
     }
   }, [syncData]);
 

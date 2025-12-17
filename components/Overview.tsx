@@ -344,7 +344,7 @@ const Overview: React.FC<OverviewProps> = ({ state, onNavigate, onCreateGoal, on
    // --- SECTION DATA PREP ---
    const lastTransactions = state.transactions.slice(0, 4);
    const lastTasks = state.tasks.slice(0, 4);
-   const activeGoals = state.goals.filter(g => g.status === 'in-progress').slice(0, 3);
+   const activeGoals = (state.goals || []).filter(g => g.status === 'in-progress').slice(0, 3);
 
    // Investments Data (Real Calculations)
    const totalInvested = state.investments.reduce((acc, curr) => acc + (curr.totalInvested || 0), 0);
@@ -693,9 +693,9 @@ const Overview: React.FC<OverviewProps> = ({ state, onNavigate, onCreateGoal, on
                                     className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:border-primary-mid outline-none appearance-none"
                                  >
                                     <option value="">Nenhum objetivo vinculado</option>
-                                    {state.goals.filter(g => g.status === 'in-progress').map(g => (
+                                    {state.goals ? state.goals.filter(g => g.status === 'in-progress').map(g => (
                                        <option key={g.id} value={g.id}>{g.title}</option>
-                                    ))}
+                                    )) : null}
                                  </select>
                                  <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
                                     <ChevronDown size={16} />

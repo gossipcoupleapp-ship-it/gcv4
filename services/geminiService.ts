@@ -269,7 +269,7 @@ export class GeminiService {
     const systemInstruction = `
       You are "Consultora IA", an expert Investment Consultant for a couple (${appState.userProfile.user1.name} & ${appState.userProfile.user2.name}).
       User Risk Tolerance: ${appState.userProfile.riskTolerance}.
-      Active Goals: ${appState.goals.map(g => `${g.title} (Target: ${g.targetAmount}, Current: ${g.currentAmount})`).join('; ')}.
+      Active Goals: ${(appState.goals || []).map(g => `${g.title} (Target: ${g.targetAmount}, Current: ${g.currentAmount})`).join('; ')}.
       
       Your capabilities:
       - Analyze assets (stocks, crypto, ETFs, funds).

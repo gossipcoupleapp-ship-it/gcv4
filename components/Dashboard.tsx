@@ -171,7 +171,7 @@ const Dashboard: React.FC<DashboardProps> = ({ state, onOpenChat }) => {
 
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 relative overflow-hidden">
             <h3 className="text-gray-500 text-xs font-bold uppercase tracking-wide mb-1">Active Goals</h3>
-            <p className="text-3xl font-bold text-gray-800">{state.goals.filter(g => g.status === 'in-progress').length}</p>
+            <p className="text-3xl font-bold text-gray-800">{(state.goals || []).filter(g => g.status === 'in-progress').length}</p>
             <div className="flex items-center mt-2 text-primary-mid text-xs font-medium">
               <CheckCircle size={14} className="mr-1" />
               <span>On track</span>
