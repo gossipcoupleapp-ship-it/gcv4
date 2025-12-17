@@ -267,7 +267,31 @@ const SettingsView: React.FC<SettingsViewProps> = ({
    );
 
    const renderCoupleProfile = () => {
-      const inviteLink = state.userProfile.inviteLink || "https://app.gossipcouple.com/invite/error";
+      const [inviteLink, setInviteLink] = useState(state.userProfile.inviteLink || "");
+      const [loadingLink, setLoadingLink] = useState(false);
+
+      useEffect(() => {
+         const fetchInvite = async () => {
+            if (activeModal === 'COUPLE_PROFILE' && !inviteLink) {
+               setLoadingLink(true);
+               try {
+                  const { data, error } = await supabase.functions.invoke('invite-manager', {
+                     body: { action: 'get_active_invite' }
+                  });
+                  if (error) throw error;
+                  if (data?.url) {
+                     setInviteLink(data.url);
+                  }
+               } catch (err) {
+                  console.error("Failed to fetch invite:", err);
+                  setInviteLink("Erro ao carregar link. Tente novamente.");
+               } finally {
+                  setLoadingLink(false);
+               }
+            }
+         };
+         fetchInvite();
+      }, [activeModal]);
 
       return (
          <div className="space-y-6">
@@ -316,25 +340,31 @@ const SettingsView: React.FC<SettingsViewProps> = ({
 
             <div className="pt-4 border-t border-gray-100">
                <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Link de Convite (P2)</label>
-               <div className="bg-gray-50 p-3 rounded-xl border border-gray-200 mb-3 break-all text-xs font-mono text-gray-500">
-                  {inviteLink}
+               <div className="bg-gray-50 p-3 rounded-xl border border-gray-200 mb-3 break-all text-xs font-mono text-gray-500 flex items-center justify-center min-h-[3rem]">
+                  {loadingLink ? <Loader2 className="animate-spin text-primary-mid" size={16} /> : (inviteLink || "Clique para gerar")}
                </div>
                <div className="grid grid-cols-2 gap-3">
                   <button
                      onClick={() => {
-                        navigator.clipboard.writeText(inviteLink);
-                        alert("Link copiado!");
+                        if (inviteLink) {
+                           navigator.clipboard.writeText(inviteLink);
+                           alert("Link copiado!");
+                        }
                      }}
-                     className="py-2.5 bg-white border border-gray-200 rounded-xl font-bold text-gray-600 hover:bg-gray-50 flex items-center justify-center gap-2 text-sm transition-colors"
+                     disabled={!inviteLink || loadingLink}
+                     className="py-2.5 bg-white border border-gray-200 rounded-xl font-bold text-gray-600 hover:bg-gray-50 flex items-center justify-center gap-2 text-sm transition-colors disabled:opacity-50"
                   >
                      <Copy size={16} /> Copiar
                   </button>
                   <button
                      onClick={() => {
-                        const msg = `Oi! Entra na nossa conta do Gossip Couple pra gente organizar tudo: ${inviteLink}`;
-                        window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
+                        if (inviteLink) {
+                           const msg = `Oi! Entra na nossa conta do Gossip Couple pra gente organizar tudo: ${inviteLink}`;
+                           window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
+                        }
                      }}
-                     className="py-2.5 bg-green-500 text-white rounded-xl font-bold hover:bg-green-600 flex items-center justify-center gap-2 text-sm transition-colors"
+                     disabled={!inviteLink || loadingLink}
+                     className="py-2.5 bg-green-500 text-white rounded-xl font-bold hover:bg-green-600 flex items-center justify-center gap-2 text-sm transition-colors disabled:opacity-50"
                   >
                      <MessageCircle size={16} /> WhatsApp
                   </button>

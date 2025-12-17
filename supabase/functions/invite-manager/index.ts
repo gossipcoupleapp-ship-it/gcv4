@@ -40,6 +40,57 @@ serve(async (req) => {
             data: { user },
         } = await supabaseClient.auth.getUser();
 
+        // --- Action: GET ACTIVE INVITE (P1) ---
+        if (action === "get_active_invite") {
+            if (!user) return new Response("Unauthorized", { status: 401, headers: corsHeaders });
+
+            const { data: profile } = await supabaseAdmin
+                .from("profiles")
+                .select("id, couple_id, role")
+                .eq("id", user.id)
+                .single();
+
+            if (!profile || profile.role !== "P1" || !profile.couple_id) {
+                return new Response("Only P1 users with a couple can retrieve invites", { status: 403, headers: corsHeaders });
+            }
+
+            // check for existing pending invite
+            const { data: existingInvite } = await supabaseAdmin
+                .from("invites")
+                .select("token")
+                .eq("couple_id", profile.couple_id)
+                .eq("status", "pending")
+                .gt("expires_at", new Date().toISOString())
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+            if (existingInvite) {
+                return new Response(JSON.stringify({ token: existingInvite.token, url: `${params.origin || ''}/invite?token=${existingInvite.token}` }), {
+                    headers: { ...corsHeaders, "Content-Type": "application/json" },
+                    status: 200,
+                });
+            }
+
+            // Create new if none exists
+            const token = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+            const { error } = await supabaseAdmin
+                .from("invites")
+                .insert({
+                    couple_id: profile.couple_id,
+                    created_by: user.id,
+                    token: token,
+                    email: null,
+                });
+
+            if (error) throw error;
+
+            return new Response(JSON.stringify({ token, url: `${params.origin || ''}/invite?token=${token}` }), {
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+                status: 200,
+            });
+        }
+
         // --- Action: CREATE INVITE (P1 Only) ---
         if (action === "create_invite") {
             if (!user) return new Response("Unauthorized", { status: 401, headers: corsHeaders });

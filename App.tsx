@@ -109,7 +109,6 @@ const MainApp: React.FC = () => {
           ...prev.userProfile,
           coupleName: couple.name || 'Seu Casal',
           riskTolerance: (profile.riskProfile as any) || 'medium',
-          inviteLink: `${window.location.origin}?token=...`
         }
       }));
     }
